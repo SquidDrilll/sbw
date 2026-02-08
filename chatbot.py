@@ -1,9 +1,9 @@
 # chatbot.py
-import discord 
 import os
 import json
 from datetime import datetime
 from typing import List, Dict
+import discord
 import groq
 
 # Load config from environment
@@ -20,7 +20,7 @@ class SimpleMemory:
     
     def __init__(self, filepath: str):
         self.filepath = filepath
-        self.conversations: Dict[str, List[Dict]] = {}  # channel_id -> messages
+        self.conversations: Dict[str, List[Dict]] = {}
         self.load()
     
     def load(self):
@@ -87,7 +87,7 @@ async def handle_chat(message, content: str):
     
     channel_id = str(message.channel.id)
     
-    # Determine system prompt based on channel type
+    # Determine channel type
     if isinstance(message.channel, discord.DMChannel):
         channel_type = "DM"
     elif isinstance(message.channel, discord.GroupChannel):
@@ -105,13 +105,11 @@ Be natural, helpful, and concise. Use Discord markdown."""
     # Get conversation history
     history = memory.get_history(channel_id)
     
-    # Generate response with typing indicator
-    async with message.channel.typing():
-        response = await get_ai_response(history, system_prompt)
+    # Generate response WITHOUT typing indicator (causes 403 error)
+    response = await get_ai_response(history, system_prompt)
     
     # Store AI response
     memory.add(channel_id, "assistant", response)
     
     # Send response
     await message.channel.send(response)
-
