@@ -1,57 +1,48 @@
-import os
-import asyncio
-import random
+import os, asyncio, random, discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
 load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
-PREFIX = os.getenv("PREFIX", "!") # Default trigger is !
-
-# self_bot=True is required for user account tokens
-bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
+# Self-bot=True is required for user account tokens
+bot = commands.Bot(command_prefix=os.getenv("PREFIX", "!"), self_bot=True)
 
 async def harvest_history():
-    """Learns the 'lore' of your chats without blocking the bot's startup"""
+    """Builds initial lore memory on startup (last 100 msgs)"""
     await bot.wait_until_ready()
     from chatbot import store
-    print("🗿 hero is loading lore... indexing channels.")
+    print("🗿 hero is learning the lore...")
     
     for channel in bot.private_channels:
         try:
-            # Scans 100 messages per channel to populate judging memory
             async for msg in channel.history(limit=100):
                 role = "assistant" if msg.author.id == bot.user.id else "user"
                 store.add(str(channel.id), str(msg.author.name), msg.content, role)
-            # Brief sleep to avoid Discord's automation detection
-            await asyncio.sleep(0.5) 
-        except:
-            continue
-    print("✨ lore learned. hero knows everything now.")
+            await asyncio.sleep(0.5)
+        except: continue
+    print("✨ lore learned.")
 
 @bot.event
 async def on_ready():
-    print(f"✅ hero is online: {bot.user.name}")
-    # Start the history harvester in the background
+    print(f"✅ hero online as {bot.user.name}")
     bot.loop.create_task(harvest_history())
 
 @bot.event
 async def on_message(message):
-    # STOP THE LOOP: Never reply to the bot's own AI messages
+    # Ignore own AI responses to prevent loops
     if message.author.id == bot.user.id:
-        if not message.content.startswith(PREFIX):
-            return
+        if not message.content.startswith("!"): return
 
-    # Trigger only on the prefix
-    if not message.content.startswith(PREFIX):
+    if not message.content.startswith("!"): return
+
+    content = message.content[1:].strip().lower()
+
+    # Manual deep pull command
+    if content == "pull":
+        from chatbot import backfill_history
+        await backfill_history(message, bot)
         return
 
-    content = message.content[len(PREFIX):].strip()
-    if not content:
-        return
-
-    # Pass to the judging engine
     from chatbot import handle_chat
     await handle_chat(message, content)
 
-bot.run(TOKEN)
+bot.run(os.getenv("DISCORD_TOKEN"))
