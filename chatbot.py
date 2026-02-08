@@ -8,6 +8,7 @@ from agno.tools.calculator import CalculatorTools
 from database import db, msg_store
 from discord_utils import resolve_mentions, restore_mentions
 
+
 PERSONA = """You are Hero Companion, and you were developed by "Jeffery Epstein." He is an AI enthusiast. You interact with users through text messages via Discord and have access to a wide range of tools.
 
 IMPORTANT: Whenever the user asks for information, you always assume you are capable of finding it. If the user asks for something you don't know about, the team can find it.
@@ -178,19 +179,19 @@ Even when calling tools, you should never break character when speaking to the u
 """
 
 def get_hero_team(user_id):
-    # Using Llama-3.3-70b for "Superior" answers as discussed
-    model_id = os.getenv("MODEL_NAME", "llama-3.3-70b-versatile")
-    model = OpenAILike(id=model_id, base_url="https://api.groq.com/openai/v1", api_key=os.getenv("GROQ_API_KEY"))
+    model = OpenAILike(id=os.getenv("MODEL_NAME", "llama-3.3-70b-versatile"), base_url="https://api.groq.com/openai/v1", api_key=os.getenv("GROQ_API_KEY"))
     
-    search_agent = Agent(name="Researcher", model=model, tools=[ExaTools()], instructions="Find real-time web data.")
+    # Specialized Researcher for Web Data
+    researcher = Agent(name="researcher", model=model, tools=[ExaTools()], instructions="Find real-time web data.")
     
-    ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")
+    # specialized Lore Agent for answering questions about the past
+    context_agent = Agent(name="lore_specialist", model=model, instructions="You specialize in recalling chat history and user details from the database.")
     
     return Team(
         model=model,
         db=db,
-        members=[search_agent],
-        instructions=PERSONA.format(time=ist_now), # Now this won't KeyError
+        members=[researcher, context_agent],
+        instructions=PERSONA.format(time=datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")),
         update_memory_on_run=True,
         enable_user_memories=True,
         markdown=True
@@ -198,24 +199,17 @@ def get_hero_team(user_id):
 
 async def handle_chat(message):
     await msg_store.store(message)
-    
-    # 2. Strip the prefix (e.g., ".") so the AI doesn't see it
     prefix = os.getenv("PREFIX", ".")
     resolved_content = resolve_mentions(message)
     clean_prompt = resolved_content[len(prefix):].strip()
     
     history = await msg_store.get_history(message.channel.id)
-    
     team = get_hero_team(str(message.author.id))
     
-    # 3. Added 'await' here to fix the Async DB error
     response = await team.arun(clean_prompt, user_id=str(message.author.id), history=history)
     
     final_output = restore_mentions(response.content).strip()
-    
-    # Adaptive lowercase logic
-    if clean_prompt.islower(): 
-        final_output = final_output.lower()
+    if clean_prompt.islower(): final_output = final_output.lower()
     
     await asyncio.sleep(len(final_output) * 0.05 + random.uniform(0.5, 1.2))
     await message.reply(f"**hero 🗿 :** {final_output}", mention_author=False)
