@@ -10,12 +10,24 @@ import aiohttp
 
 # Config
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY") # Get a free one at openrouter.ai
-GROQ_MODEL = "llama-3.1-8b-instant" # Using 8B to save tokens
-MAX_HISTORY = 10000 
+OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
+GROQ_MODEL = "llama-3.1-8b-instant" 
 DB_FILE = "chat_memory.db"
 
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
+
+# --- HUMAN PERSONA CONFIG ---
+# Replace [Your Name] with your actual name or nickname
+MY_PERSONA = """
+You are a real person named [Your Name] chatting in a Discord Group DM. 
+Follow these 'Human Rules' strictly:
+1. TALK IN LOWERCASE. it looks more natural.
+2. BE CONCISE. real people don't write paragraphs. use less words , around 30 ( or more if asked or feels neccesary).
+3. USE SLANG. use words like 'fr', 'ong', 'lol', 'idk', 'rn', and 'nah' naturally.
+4. DON'T BE A TEACHER. if someone asks a question, give a short, snappy answer.
+5. MATCH THE VIBE. if everyone is joking, join in. don't be a robot.
+6. NO ROBOT TALK. never say 'as an ai' or 'i'm here to help'. 
+"""
 
 class MessageStore:
     def __init__(self, db_path: str):
@@ -31,7 +43,7 @@ class MessageStore:
         conn.commit()
         conn.close()
 
-    def get_history(self, channel_id, limit=20):
+    def get_history(self, channel_id, limit=15): # Reduced limit for better vibe matching
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute('SELECT author_name, content, role FROM messages WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?', (channel_id, limit))
         rows = cursor.fetchall()
@@ -41,36 +53,30 @@ class MessageStore:
 store = MessageStore(DB_FILE)
 
 async def get_ai_response(history):
-    system_prompt = "You are a helpful assistant. IMPORTANT: Never start your message with '!' or any command prefix."
-    
-    # Try Groq First
+    # FIXED: Now uses the MY_PERSONA prompt
     try:
-        print("🔄 Trying Groq...")
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL,
-            messages=[{"role": "system", "content": system_prompt}] + history,
-            max_tokens=800
+            messages=[{"role": "system", "content": MY_PERSONA}] + history,
+            max_tokens=500, # Lower tokens = faster response
+            temperature=0.8 # Higher temperature = more "creative/human"
         )
         return response.choices[0].message.content
     except Exception as e:
-        print(f"⚠️ Groq Failed/Limited: {e}")
-        
-        # Fallback to OpenRouter (Free)
         if OPENROUTER_KEY:
-            print("🔄 Swapping to OpenRouter Fallback...")
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {OPENROUTER_KEY}"},
                     json={
                         "model": "meta-llama/llama-3.1-8b-instruct:free",
-                        "messages": [{"role": "system", "content": system_prompt}] + history
+                        "messages": [{"role": "system", "content": MY_PERSONA}] + history
                     }
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         return data['choices'][0]['message']['content']
-        return "❌ I'm currently exhausted. Please try again in a minute!"
+        return "idk man my brain is fried rn"
 
 async def handle_chat(message, content):
     channel_id = str(message.channel.id)
@@ -79,12 +85,15 @@ async def handle_chat(message, content):
     history = store.get_history(channel_id)
     response = await get_ai_response(history)
     
-    # Double-check we aren't sending a prefix to avoid loops
-    clean_response = response.lstrip("!?. ") 
+    # --- HUMAN BEHAVIOR: DYNAMIC DELAY ---
+    # Calculates a "typing speed" so it feels real
+    typing_speed = (len(response) * 0.06) + random.uniform(0.5, 1.5)
+    await asyncio.sleep(min(typing_speed, 4)) # Don't wait longer than 4s
+    
+    clean_response = response.strip().lower().lstrip("!?. ")
     
     try:
-        # Reply mode is safer for self-bots to avoid being flagged as spam
         await message.reply(clean_response, mention_author=False)
         store.add(channel_id, "AI", clean_response, "assistant")
-    except discord.errors.Forbidden:
-        print("❌ Permission Error: Discord blocked the send.")
+    except Exception as e:
+        print(f"❌ Error: {e}")
