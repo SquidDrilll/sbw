@@ -1,0 +1,5 @@
+# requirements.txt
+discord.py-self==2.1.0
+groq
+python-dotenv
+aiohttp
