@@ -1,71 +1,63 @@
-# chatbot.py
+# main.py
 import os
-import sqlite3
 import asyncio
-import groq
-from datetime import datetime
+import random
+import discord
+from discord.ext import commands
+from dotenv import load_dotenv
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client = groq.Groq(api_key=GROQ_API_KEY)
+load_dotenv()
+TOKEN = os.getenv("DISCORD_TOKEN")
+PREFIX = os.getenv("PREFIX", "!")
 
-class MessageStore:
-    def __init__(self, db_path="chat_memory.db"):
-        self.db_path = db_path
-        conn = sqlite3.connect(self.db_path)
-        # We added author_name to make searching easier
-        conn.execute('CREATE TABLE IF NOT EXISTS messages (channel_id TEXT, author_name TEXT, content TEXT, role TEXT, timestamp TEXT)')
-        conn.close()
+bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
 
-    def add(self, channel_id, author_name, content, role):
-        conn = sqlite3.connect(self.db_path)
-        # Use 'INSERT OR IGNORE' logic or just check if it exists to avoid duplicates
-        conn.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?)', 
-                     (channel_id, author_name, content, role, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-
-    def search_history(self, channel_id, query_name):
-        conn = sqlite3.connect(self.db_path)
-        # Search specifically for what a certain person said
-        cursor = conn.execute('SELECT author_name, content FROM messages WHERE channel_id = ? AND author_name LIKE ? LIMIT 10', 
-                             (channel_id, f"%{query_name}%"))
-        rows = cursor.fetchall()
-        conn.close()
-        return "\n".join([f"{r[0]}: {r[1]}" for r in rows])
-
-    def get_recent(self, channel_id, limit=20):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute('SELECT author_name, content, role FROM messages WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?', (channel_id, limit))
-        rows = cursor.fetchall()
-        conn.close()
-        return [{"role": r[2], "content": f"{r[0]}: {r[1]}" if r[2] == "user" else r[1]} for r in reversed(rows)]
-
-store = MessageStore()
-
-async def handle_chat(message, content):
-    channel_id = str(message.channel.id)
+async def harvest_history():
+    """Background task to learn past conversations without freezing the bot"""
+    await bot.wait_until_ready()
+    from chatbot import store
+    print("📥 Background Indexing: Learning recent history...")
     
-    # 1. Check if the user is asking about a specific person
-    relevant_past = ""
-    if "say" in content.lower() or "tell" in content.lower():
-        # Try to guess who they are asking about (simple version)
-        words = content.split()
-        potential_name = words[-1] # Usually the last word in "What did Alex say"
-        relevant_past = store.search_history(channel_id, potential_name)
+    indexed_count = 0
+    for channel in bot.private_channels:
+        try:
+            # Only get 20 messages per channel to keep it fast
+            async for msg in channel.history(limit=20):
+                role = "assistant" if msg.author.id == bot.user.id else "user"
+                store.add(str(channel.id), str(msg.author.name), msg.content, role)
+            indexed_count += 1
+            # Tiny sleep to avoid Discord's 'Self-Bot' detection during indexing
+            await asyncio.sleep(0.5) 
+        except:
+            continue
+    print(f"✨ Indexing Complete! Learned from {indexed_count} channels.")
 
-    # 2. Get the standard recent context
-    history = store.get_recent(channel_id)
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user.name}")
+    print(f"📝 Prefix: '{PREFIX}' | Bot is ACTIVE and listening!")
+    # Start harvesting in the background so on_ready finishes instantly
+    bot.loop.create_task(harvest_history())
+
+@bot.event
+async def on_message(message):
+    # ALLOW you to trigger the bot, but IGNORE the AI's automated responses
+    # We check if the message ISN'T just a reply from the chatbot logic
+    if message.author.id == bot.user.id:
+        if not message.content.startswith(PREFIX):
+            return 
+
+    if not message.content.startswith(PREFIX):
+        return
+
+    content = message.content[len(PREFIX):].strip()
+    if not content:
+        return
+
+    # Jitter to look human
+    await asyncio.sleep(random.uniform(0.5, 1.2))
     
-    # 3. Build the prompt
-    system_msg = f"You are a helpful assistant. Past info found: {relevant_past}"
-    
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "system", "content": system_msg}] + history
-        )
-        ai_text = response.choices[0].message.content.lstrip("!")
-        await message.reply(ai_text, mention_author=False)
-        store.add(channel_id, "AI", ai_text, "assistant")
-    except Exception as e:
-        print(f"Error: {e}")
+    from chatbot import handle_chat
+    await handle_chat(message, content)
+
+bot.run(TOKEN)
