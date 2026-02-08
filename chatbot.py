@@ -57,14 +57,21 @@ async def handle_chat(message):
         prompt = resolve_mentions(message)[len(prefix):].strip()
         if not prompt: return
 
-        # 1. Fetch and format history as a simple transcript
+        # 1. Fetch recent history
         raw_history = await msg_store.get_history(message.channel.id, limit=10)
+        
+        # 2. FORMAT HISTORY (Fixed the 'dict' attribute error here)
         history_str = ""
-        for m in (raw_history or []):
-            role = "hero 🗿" if m.role == "assistant" else "User"
-            history_str += f"{role}: {m.content}\n"
+        if raw_history:
+            for msg in raw_history:
+                # Use msg['role'] instead of msg.role
+                role_name = "hero 🗿" if msg.get('role') == "assistant" else "User"
+                content = msg.get('content', '')
+                history_str += f"{role_name}: {content}\n"
+        else:
+            history_str = "No previous history found."
 
-        # 2. Key Rotation List
+        # 3. KEY ROTATION LOGIC (The If -> Else chain)
         keys_to_try = [
             (os.getenv("GROQ_API_KEY_1"), False),
             (os.getenv("GROQ_API_KEY_2"), False),
@@ -73,17 +80,17 @@ async def handle_chat(message):
         ]
         
         response = None
-        # 3. Failover Loop with Tool-Error Catching
         for key, is_or in keys_to_try:
             if not key: continue
             try:
+                # Build the team and run it
                 team = get_hero_team(str(message.author.id), key, history_str, is_openrouter=is_or)
                 response = await team.arun(prompt, user_id=str(message.author.id))
                 if response: break 
             except Exception as e:
                 err = str(e).lower()
-                # Catch 429s AND Tool Errors (400) to force a key-switch
-                if any(x in err for x in ["rate limit", "429", "tool_use_failed", "400"]):
+                # If rate limited, just 'continue' to the next key in the list
+                if any(x in err for x in ["429", "rate limit", "400", "tool_use_failed"]):
                     print(f"⚠️ Key failed/limited. Trying next...")
                     continue
                 else: raise e 
