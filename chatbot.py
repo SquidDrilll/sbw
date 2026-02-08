@@ -172,15 +172,18 @@ Even when calling tools, you should never break character when speaking to the u
 """
 
 def get_hero_team(user_id):
-    model = OpenAILike(id="llama-3.1-8b-instant", base_url="https://api.groq.com/openai/v1", api_key=os.getenv("GROQ_API_KEY"))
+    # Using Llama-3.3-70b for "Superior" answers as discussed
+    model = OpenAILike(id="llama-3.3-70b-specdec", base_url="https://api.groq.com/openai/v1", api_key=os.getenv("GROQ_API_KEY"))
     
     search_agent = Agent(name="Researcher", model=model, tools=[ExaTools()], instructions="Find real-time web data.")
+    
+    ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")
     
     return Team(
         model=model,
         db=db,
         members=[search_agent],
-        instructions=PERSONA.format(time=datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")),
+        instructions=PERSONA.format(time=ist_now), # Now this won't KeyError
         update_memory_on_run=True,
         enable_user_memories=True,
         markdown=True
@@ -188,14 +191,24 @@ def get_hero_team(user_id):
 
 async def handle_chat(message):
     await msg_store.store(message)
-    clean_prompt = resolve_mentions(message)
+    
+    # 2. Strip the prefix (e.g., ".") so the AI doesn't see it
+    prefix = os.getenv("PREFIX", ".")
+    resolved_content = resolve_mentions(message)
+    clean_prompt = resolved_content[len(prefix):].strip()
+    
     history = await msg_store.get_history(message.channel.id)
     
     team = get_hero_team(str(message.author.id))
-    response = team.arun(clean_prompt, user_id=str(message.author.id), history=history)
+    
+    # 3. Added 'await' here to fix the Async DB error
+    response = await team.arun(clean_prompt, user_id=str(message.author.id), history=history)
     
     final_output = restore_mentions(response.content).strip()
-    if clean_prompt.islower(): final_output = final_output.lower()
+    
+    # Adaptive lowercase logic
+    if clean_prompt.islower(): 
+        final_output = final_output.lower()
     
     await asyncio.sleep(len(final_output) * 0.05 + random.uniform(0.5, 1.2))
     await message.reply(f"**hero 🗿 :** {final_output}", mention_author=False)
