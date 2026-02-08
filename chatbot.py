@@ -173,7 +173,8 @@ Even when calling tools, you should never break character when speaking to the u
 
 def get_hero_team(user_id):
     # Using Llama-3.3-70b for "Superior" answers as discussed
-    model = OpenAILike(id="llama-3.3-70b-specdec", base_url="https://api.groq.com/openai/v1", api_key=os.getenv("GROQ_API_KEY"))
+    model_id = os.getenv("MODEL_NAME", "llama-3.3-70b-versatile")
+    model = OpenAILike(id=model_id, base_url="https://api.groq.com/openai/v1", api_key=os.getenv("GROQ_API_KEY"))
     
     search_agent = Agent(name="Researcher", model=model, tools=[ExaTools()], instructions="Find real-time web data.")
     
