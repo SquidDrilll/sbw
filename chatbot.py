@@ -192,7 +192,7 @@ async def handle_chat(message):
     history = await msg_store.get_history(message.channel.id)
     
     team = get_hero_team(str(message.author.id))
-    response = team.run(clean_prompt, user_id=str(message.author.id), history=history)
+    response = team.arun(clean_prompt, user_id=str(message.author.id), history=history)
     
     final_output = restore_mentions(response.content).strip()
     if clean_prompt.islower(): final_output = final_output.lower()
