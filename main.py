@@ -4,19 +4,23 @@ from dotenv import load_dotenv
 from database import msg_store
 from chatbot import handle_chat
 
+
 load_dotenv()
 PREFIX = os.getenv("PREFIX", ".")
 bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
 
 async def learn_lore():
-    """Background task to index history like the junkie bot."""
+    """Background task to index history efficiently."""
     await bot.wait_until_ready()
     print("🗿 hero is learning the lore in the background...")
     for channel in bot.private_channels:
         try:
-            async for msg in channel.history(limit=1000):
+            # Reduce limit from 1000 to 200 for the initial sync
+            async for msg in channel.history(limit=200):
                 await msg_store.store(msg)
-            await asyncio.sleep(1)
+                # Add a tiny jitter to stay under RPM limits
+                await asyncio.sleep(0.2) 
+            await asyncio.sleep(2) # Pause between channels
         except: continue
     print("✨ lore indexing complete.")
 
