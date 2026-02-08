@@ -1,45 +1,56 @@
 # main.py
 import os
-import asyncio
-import discord
+import sys
 from discord.ext import commands
 from dotenv import load_dotenv
 
+# Load environment variables first
 load_dotenv()
 
-# Bot configuration
-PREFIX = os.getenv("PREFIX", "!")
+# Configuration from environment only - no hardcoding
 TOKEN = os.getenv("DISCORD_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+PREFIX = os.getenv("PREFIX", "!")  # Default to ! if not set
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-if not TOKEN or not GROQ_API_KEY:
-    raise ValueError("DISCORD_TOKEN and GROQ_API_KEY are required")
+# Validate required variables
+if not TOKEN:
+    print("ERROR: DISCORD_TOKEN environment variable is required")
+    sys.exit(1)
+if not GROQ_API_KEY:
+    print("ERROR: GROQ_API_KEY environment variable is required")
+    sys.exit(1)
 
-# discord.py-self uses Client differently - no Intents needed in the same way
+# Initialize bot with only the prefix from env
 bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user.name} ({bot.user.id})")
-    print("Monitoring all Group DMs...")
-    
-    # Load chatbot module after bot is ready
-    from chatbot import setup_chatbot
-    await setup_chatbot(bot)
+    print(f"✅ Logged in as {bot.user.name} ({bot.user.id})")
+    print(f"📝 Using prefix: '{PREFIX}'")
+    print(f"🤖 Model: {GROQ_MODEL}")
+    print("Ready for commands!")
 
 @bot.event
 async def on_message(message):
-    # Ignore own messages to prevent loops
+    # Ignore own messages
     if message.author.id == bot.user.id:
         return
     
-    # Process commands first
-    await bot.process_commands(message)
+    # Only process messages starting with the prefix
+    if not message.content.startswith(PREFIX):
+        return
     
-    # Handle Group DM messages
-    if isinstance(message.channel, discord.GroupChannel):
-        from chatbot import handle_gdm_message
-        await handle_gdm_message(message)
+    # Remove prefix and get the actual content
+    content = message.content[len(PREFIX):].strip()
+    
+    # Skip empty messages
+    if not content:
+        return
+    
+    # Route to chatbot handler
+    from chatbot import handle_chat
+    await handle_chat(message, content)
 
 if __name__ == "__main__":
     bot.run(TOKEN)
