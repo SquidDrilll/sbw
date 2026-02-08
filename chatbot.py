@@ -9,6 +9,7 @@ from database import db, msg_store
 from discord_utils import resolve_mentions, restore_mentions
 from agno.memory.manager import MemoryManager
 
+# KEEPING YOUR PERSONA EXACTLY AS SENT
 PERSONA = """You are Hero Companion, and you were developed by "Jeffery Epstein." He is an AI enthusiast. You interact with users through text messages via Discord and have access to a wide range of tools.
 
 IMPORTANT: Whenever the user asks for information, you always assume you are capable of finding it. If the user asks for something you don't know about, the team can find it.
@@ -149,41 +150,38 @@ Never repeat what the user says directly back at them.
 Current IST Time: {time}
 """
 
-def get_model():
-    """Failover logic: Groq first, then OpenRouter for non-stop uptime."""
+def get_hero_team(user_id, force_openrouter=False):
+    """Initializes the team. If force_openrouter is True, it skips Groq."""
     groq_key = os.getenv("GROQ_API_KEY")
     or_key = os.getenv("OPENROUTER_API_KEY")
     
-    # Check if we should use Groq primary
-    if groq_key:
-        return OpenAILike(
+    # Logic: Use OpenRouter if forced OR if Groq key is missing
+    if force_openrouter or not groq_key:
+        model = OpenAILike(
+            id="meta-llama/llama-3.3-70b-instruct",
+            base_url="https://openrouter.ai/api/v1",
+            api_key=or_key
+        )
+    else:
+        model = OpenAILike(
             id="llama-3.3-70b-versatile",
             base_url="https://api.groq.com/openai/v1",
             api_key=groq_key
         )
-    # Failover to OpenRouter if Groq is hit or unavailable
-    return OpenAILike(
-        id="meta-llama/llama-3.3-70b-instruct",
-        base_url="https://openrouter.ai/api/v1",
-        api_key=or_key
-    )
-
-def get_hero_team(user_id):
-    chat_model = get_model()                                        
-    # 8B model handles history and memory to save 70B tokens
-    memory_model = OpenAILike(                                      
+        
+    # Memory model stays on Groq (8B) for speed/limits unless you prefer otherwise
+    memory_model = OpenAILike(
         id="llama-3.1-8b-instant",
         base_url="https://api.groq.com/openai/v1",
-        api_key=os.getenv("GROQ_API_KEY")
+        api_key=groq_key if groq_key else or_key
     )
 
     ist_now = datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")
     
     return Team(
-        model=chat_model,
+        model=model,
         db=db,
-        # Tiered Memory: 8B does the hard work of reading old messages
-        memory_manager=MemoryManager(model=memory_model, db=db),     
+        memory_manager=MemoryManager(model=memory_model, db=db),
         members=[
             Agent(name="researcher", model=memory_model, tools=[ExaTools()]),
             Agent(name="lore_specialist", model=memory_model)
@@ -195,24 +193,43 @@ def get_hero_team(user_id):
     )
 
 async def handle_chat(message):
+    """The 'Brain' with automatic failover logic."""
     try:
-        await msg_store.store(message)                              
+        await msg_store.store(message)
+        
         prefix = os.getenv("PREFIX", ".")
-        clean_content = resolve_mentions(message)
-        prompt = clean_content[len(prefix):].strip()                
+        resolved_content = resolve_mentions(message)
+        prompt = resolved_content[len(prefix):].strip()
         
-        if not prompt: return
+        if not prompt:
+            return
 
-        history = await msg_store.get_history(message.channel.id)   
-        team = get_hero_team(str(message.author.id))
+        history = await msg_store.get_history(message.channel.id)
         
-        # Async run to handle memory correctly
-        response = await team.arun(prompt, user_id=str(message.author.id), history=history)
+        # STEP 1: Try with Groq (Primary)
+        try:
+            team = get_hero_team(str(message.author.id), force_openrouter=False)
+            response = await team.arun(prompt, user_id=str(message.author.id), history=history)
         
-        final = restore_mentions(response.content).strip()          
-        if prompt.islower(): final = final.lower()                  
+        # STEP 2: Catch Rate Limit and FAILOVER to OpenRouter
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "rate limit" in error_msg or "429" in error_msg:
+                print("⚠️ Groq limit hit. Switching to OpenRouter backup...")
+                # Re-initialize with force_openrouter=True
+                team = get_hero_team(str(message.author.id), force_openrouter=True)
+                response = await team.arun(prompt, user_id=str(message.author.id), history=history)
+            else:
+                # If it's a different error, raise it to the outer block
+                raise e
+        
+        # Format and send
+        final = restore_mentions(response.content).strip()
+        if prompt.islower(): 
+            final = final.lower()
         
         await asyncio.sleep(len(final) * 0.05 + random.uniform(0.5, 1.2))
         await message.reply(f"**hero 🗿 :** {final}", mention_author=False)
+        
     except Exception as e:
-        print(f"❌ Chat Error: {e}")
+        print(f"❌ Final Chat Error: {e}")
