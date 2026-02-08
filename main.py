@@ -17,7 +17,7 @@ async def harvest_lore():
     
     for channel in bot.private_channels:
         try:
-            async for msg in channel.history(limit=100):
+            async for msg in channel.history(limit=10000):
                 role = "assistant" if msg.author.id == bot.user.id else "user"
                 store.add(str(channel.id), str(msg.author.name), msg.content, role)
             await asyncio.sleep(0.5)
