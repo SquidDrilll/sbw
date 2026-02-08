@@ -1,22 +1,21 @@
 # chatbot.py
 import os
 import sqlite3
-import json
+import asyncio  # ADD THIS IMPORT
+import random
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict
 import discord
 import groq
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-MAX_HISTORY = int(os.getenv("MAX_HISTORY", "10000"))  # 10k messages
+MAX_HISTORY = int(os.getenv("MAX_HISTORY", "10000"))
 DB_FILE = os.getenv("DB_FILE", "chat_memory.db")
 
 groq_client = groq.Groq(api_key=GROQ_API_KEY)
 
 class MessageStore:
-    """SQLite storage for up to 10k+ messages"""
-    
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.init_db()
@@ -32,24 +31,17 @@ class MessageStore:
                 author_name TEXT,
                 content TEXT,
                 role TEXT,
-                timestamp TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                timestamp TEXT
             )
         ''')
-        c.execute('''
-            CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id)
-        ''')
-        c.execute('''
-            CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)
-        ''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)')
         conn.commit()
         conn.close()
     
     def add(self, channel_id: str, author_id: str, author_name: str, content: str, role: str = "user"):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        
-        # Insert new message
         c.execute('''
             INSERT INTO messages (channel_id, author_id, author_name, content, role, timestamp)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -82,33 +74,8 @@ class MessageStore:
         rows = c.fetchall()
         conn.close()
         
-        # Reverse to get chronological order
         return [{"role": row[2], "content": f"{row[0]}: {row[1]}" if row[2] == "user" else row[1]} 
                 for row in reversed(rows)]
-    
-    def search_by_author(self, channel_id: str, author_name: str, hours: int = 24) -> List[Dict]:
-        """Search messages by specific author in timeframe"""
-        since = (datetime.now() - timedelta(hours=hours)).isoformat()
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        c.execute('''
-            SELECT author_name, content, timestamp 
-            FROM messages 
-            WHERE channel_id = ? AND author_name LIKE ? AND timestamp > ?
-            ORDER BY timestamp DESC
-        ''', (channel_id, f"%{author_name}%", since))
-        
-        rows = c.fetchall()
-        conn.close()
-        return [{"author": row[0], "content": row[1], "time": row[2]} for row in rows]
-    
-    def get_stats(self):
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        c.execute('SELECT COUNT(*), COUNT(DISTINCT channel_id) FROM messages')
-        total, channels = c.fetchone()
-        conn.close()
-        return {"total_messages": total, "channels": channels}
 
 store = MessageStore(DB_FILE)
 
@@ -143,10 +110,9 @@ async def handle_chat(message, content: str):
     else:
         channel_type = "Server"
     
-    # Smart system prompt
-    system_prompt = f"""You are {message.channel.me.name if hasattr(message.channel, 'me') else 'AI Assistant'}, chatting in Discord {channel_type}.
+    system_prompt = f"""You are an AI assistant in Discord {channel_type}.
 You remember past conversations. Be helpful, natural, and concise.
-Use Discord markdown. Reference previous messages when relevant."""
+Use Discord markdown."""
 
     # Get history
     history = store.get_history(channel_id, limit=30)
@@ -154,34 +120,28 @@ Use Discord markdown. Reference previous messages when relevant."""
     # Generate response
     response = await get_ai_response(history, system_prompt)
     
-    # Try to send with retry logic
-    max_retries = 3
-    for attempt in range(max_retries):
+    # Try multiple methods to send
+    methods = [
+        # Method 1: Direct send
+        lambda: message.channel.send(response[:2000]),
+        # Method 2: Reply to message
+        lambda: message.reply(response[:2000], mention_author=False),
+        # Method 3: Reply with delay
+        lambda: asyncio.sleep(1) or message.reply(response[:2000], mention_author=False),
+    ]
+    
+    for i, method in enumerate(methods):
         try:
-            # Split long messages
-            if len(response) > 2000:
-                chunks = [response[i:i+2000] for i in range(0, len(response), 2000)]
-                for chunk in chunks:
-                    await message.channel.send(chunk)
-                    await asyncio.sleep(0.5)
-            else:
-                await message.channel.send(response)
-            
-            # Store AI response
+            await asyncio.sleep(random.uniform(0.5, 1.0))  # Random delay
+            await method()
             store.add(channel_id, "assistant", "AI", response, "assistant")
-            break
-            
-        except discord.errors.Forbidden as e:
-            print(f"❌ Forbidden (attempt {attempt+1}): {e}")
-            if attempt == max_retries - 1:
-                # Last resort: try to reply instead of send
-                try:
-                    await message.reply(response[:2000], mention_author=False)
-                    store.add(channel_id, "assistant", "AI", response, "assistant")
-                except Exception as e2:
-                    print(f"❌ Reply also failed: {e2}")
-            await asyncio.sleep(2)
-            
+            print(f"✅ Sent via method {i+1}")
+            return
+        except discord.errors.Forbidden:
+            print(f"❌ Method {i+1} forbidden, trying next...")
+            continue
         except Exception as e:
-            print(f"❌ Error sending (attempt {attempt+1}): {e}")
-            await asyncio.sleep(1)
+            print(f"❌ Method {i+1} error: {e}")
+            continue
+    
+    print("❌ All methods failed")
