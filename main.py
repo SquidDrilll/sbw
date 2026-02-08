@@ -9,17 +9,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PREFIX = os.getenv("PREFIX", "!")
 
-if not TOKEN or not GROQ_API_KEY:
-    raise ValueError("DISCORD_TOKEN and GROQ_API_KEY are required")
+if not TOKEN:
+    raise ValueError("DISCORD_TOKEN required")
 
 bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user.name} ({bot.user.id})")
+    print(f"✅ Logged in as {bot.user.name}")
     print(f"📝 Prefix: '{PREFIX}'")
     print("Ready!")
 
@@ -35,8 +34,7 @@ async def on_message(message):
     if not content:
         return
     
-    # Add random delay to avoid rate limits
-    await asyncio.sleep(random.uniform(0.5, 1.5))
+    await asyncio.sleep(random.uniform(0.3, 0.8))
     
     from chatbot import handle_chat
     await handle_chat(message, content)
