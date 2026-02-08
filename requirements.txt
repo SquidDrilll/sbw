@@ -1,10 +1,11 @@
-# requirements.txt
-discord.py-self>=2.0.0
-groq>=0.4.0
-openai>=1.0.0
-aiohttp>=3.8.0
-python-dotenv>=1.0.0
 agno
+openai>=1.77.0
+git+https://github.com/dolfies/discord.py-self.git@97e06c393f6e8f30d00fe0dd9cdf7196145fa851#egg=discord.py-self
+groq
+python-dotenv>=1.0.0
+psycopg2-binary
 asyncpg
 sqlalchemy
-psycopg2-binary
+exa-py
+pytz>=2024.1
+e2b_code_interpreter
