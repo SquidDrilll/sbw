@@ -3,11 +3,14 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 load_dotenv()
-# Using the self-bot wrapper library
-bot = commands.Bot(command_prefix=os.getenv("PREFIX", "!"), self_bot=True)
+TOKEN = os.getenv("DISCORD_TOKEN")
+PREFIX = os.getenv("PREFIX", "!")
+
+# Self-bot setup
+bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
 
 async def harvest_lore():
-    """Builds initial 100-message lore database on startup"""
+    """Builds initial lore database on startup (last 100 msgs)"""
     await bot.wait_until_ready()
     from chatbot import store
     print("🗿 hero is learning the lore... please wait.")
@@ -23,27 +26,31 @@ async def harvest_lore():
 
 @bot.event
 async def on_ready():
-    print(f"✅ hero online: {bot.user.name}")
+    print(f"✅ hero online as {bot.user.name}")
     # Start background lore harvesting
     bot.loop.create_task(harvest_lore())
 
 @bot.event
 async def on_message(message):
-    # Identity protection: ignore self-bot responses
+    # Ignore own automated messages to prevent loops
     if message.author.id == bot.user.id:
-        if not message.content.startswith("!"): return
+        if not message.content.startswith(PREFIX):
+            return
 
-    if not message.content.startswith("!"): return
+    # Trigger only on the prefix (e.g., !)
+    if not message.content.startswith(PREFIX):
+        return
 
     content = message.content[1:].strip().lower()
 
-    # Deep Harvest command
+    # The manual deep pull command
     if content == "pull":
         from chatbot import backfill_history
         await backfill_history(message, bot)
         return
 
+    # Send to the judging engine
     from chatbot import handle_chat
     await handle_chat(message, content)
 
-bot.run(os.getenv("DISCORD_TOKEN"))
+bot.run(TOKEN)
