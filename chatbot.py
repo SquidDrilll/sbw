@@ -75,7 +75,7 @@ If no user context is available, respond normally without mentioning it.
 
 Asking About Users
 When asked about a user by name/nickname (e.g., "What does John like?"):
-The system can resolve Discord usernames, display names, and nicknames through chat history and persistent lore.
+The system can resolve Discord usernames, display names, and nicknames through chat history and persistent lore in PostgreSQL.
 
 Temporal Awareness (CRITICAL)
 You will receive the current date and time at the start of each conversation context. All messages in the conversation history include timestamps showing when they were sent. All times are displayed in IST (Indian Standard Time, Asia/Kolkata timezone, UTC+5:30).
@@ -150,16 +150,18 @@ Current IST Time: {time}
 """
 
 def get_model():
-    """Tries Groq (70B) first; falls back to OpenRouter (70B) for non-stop uptime."""
+    """Failover logic: Groq first, then OpenRouter for non-stop uptime."""
     groq_key = os.getenv("GROQ_API_KEY")
     or_key = os.getenv("OPENROUTER_API_KEY")
     
+    # Check if we should use Groq primary
     if groq_key:
         return OpenAILike(
             id="llama-3.3-70b-versatile",
             base_url="https://api.groq.com/openai/v1",
             api_key=groq_key
         )
+    # Failover to OpenRouter if Groq is hit or unavailable
     return OpenAILike(
         id="meta-llama/llama-3.3-70b-instruct",
         base_url="https://openrouter.ai/api/v1",
@@ -167,9 +169,9 @@ def get_model():
     )
 
 def get_hero_team(user_id):
-    chat_model = get_model()
-    # 8B model handles background memory processing to save 70B tokens
-    memory_model = OpenAILike(
+    chat_model = get_model()                                        
+    # 8B model handles history and memory to save 70B tokens
+    memory_model = OpenAILike(                                      
         id="llama-3.1-8b-instant",
         base_url="https://api.groq.com/openai/v1",
         api_key=os.getenv("GROQ_API_KEY")
@@ -180,7 +182,8 @@ def get_hero_team(user_id):
     return Team(
         model=chat_model,
         db=db,
-        memory_manager=MemoryManager(model=memory_model, db=db),
+        # Tiered Memory: 8B does the hard work of reading old messages
+        memory_manager=MemoryManager(model=memory_model, db=db),     
         members=[
             Agent(name="researcher", model=memory_model, tools=[ExaTools()]),
             Agent(name="lore_specialist", model=memory_model)
@@ -193,39 +196,23 @@ def get_hero_team(user_id):
 
 async def handle_chat(message):
     try:
-        # 1. Log incoming message to PostgreSQL
-        await msg_store.store(message)
-        
-        # 2. Extract clean prompt using prefix variable
+        await msg_store.store(message)                              
         prefix = os.getenv("PREFIX", ".")
-        resolved_content = resolve_mentions(message)
-        clean_prompt = resolved_content[len(prefix):].strip()
+        clean_content = resolve_mentions(message)
+        prompt = clean_content[len(prefix):].strip()                
         
-        if not clean_prompt:
-            return
+        if not prompt: return
 
-        # 3. Pull recent history for context
-        history = await msg_store.get_history(message.channel.id)
-        
-        # 4. Initialize the Team and generate response
+        history = await msg_store.get_history(message.channel.id)   
         team = get_hero_team(str(message.author.id))
         
-        # USE arun() for Async DB compatibility
-        response = await team.arun(clean_prompt, user_id=str(message.author.id), history=history)
+        # Async run to handle memory correctly
+        response = await team.arun(prompt, user_id=str(message.author.id), history=history)
         
-        # 5. Clean and format the final output
-        final_output = restore_mentions(response.content).strip()
+        final = restore_mentions(response.content).strip()          
+        if prompt.islower(): final = final.lower()                  
         
-        # Match user's lowercase style if applicable
-        if clean_prompt.islower(): 
-            final_output = final_output.lower()
-        
-        # 6. Human-like delay logic
-        await asyncio.sleep(len(final_output) * 0.05 + random.uniform(0.5, 1.2))
-        
-        # 7. Reply and store AI response in logs
-        sent_msg = await message.reply(f"**hero 🗿 :** {final_output}", mention_author=False)
-        await msg_store.store(sent_msg)
-        
+        await asyncio.sleep(len(final) * 0.05 + random.uniform(0.5, 1.2))
+        await message.reply(f"**hero 🗿 :** {final}", mention_author=False)
     except Exception as e:
         print(f"❌ Chat Error: {e}")
