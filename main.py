@@ -1,29 +1,51 @@
-import os
-import discord
+import os, discord, asyncio
 from discord.ext import commands
 from dotenv import load_dotenv
 from database import msg_store
 from chatbot import handle_chat
 
 load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
-# This pulls the "." from your variables; defaults to "!" if not found
-PREFIX = os.getenv("PREFIX", "!") 
-
+PREFIX = os.getenv("PREFIX", ".")
 bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
+
+async def learn_lore():
+    """Background task to index history like the junkie bot."""
+    await bot.wait_until_ready()
+    print("🗿 hero is learning the lore in the background...")
+    for channel in bot.private_channels:
+        try:
+            async for msg in channel.history(limit=1000):
+                await msg_store.store(msg)
+            await asyncio.sleep(1)
+        except: continue
+    print("✨ lore indexing complete.")
+
+@bot.command()
+async def tldr(ctx, count: int = 50):
+    """Summarizes the last N messages."""
+    await ctx.message.delete(delay=1.0)
+    messages = [m async for m in ctx.channel.history(limit=count)]
+    lines = [f"{m.author.display_name}: {m.clean_content}" for m in reversed(messages)]
+    prompt = "Summarize this Discord chat in 4-6 bullet points:\n\n" + "\n".join(lines)
+    
+    # Quick call to the model for the summary
+    from chatbot import get_hero_team
+    team = get_hero_team(str(ctx.author.id))
+    summary = await team.arun(prompt)
+    await ctx.send(f"**TL;DR:**\n{summary.content}")
 
 @bot.event
 async def on_ready():
     await msg_store.init()
-    print(f"✅ hero 🗿 online. prefix is set to: {PREFIX}")
+    bot.loop.create_task(learn_lore())
+    print(f"✅ hero 🗿 online. Prefix: {PREFIX}")
 
 @bot.event
 async def on_message(message):
     if message.author.id == bot.user.id and not message.content.startswith(PREFIX):
         return
-        
-    if message.content.startswith(PREFIX):
-        # Pass the message to the handler
-        await handle_chat(message) 
+    await bot.process_commands(message) # Enable commands like !tldr
+    if message.content.startswith(PREFIX) and not message.content.startswith(f"{PREFIX}tldr"):
+        await handle_chat(message)
 
-bot.run(TOKEN)
+bot.run(os.getenv("DISCORD_TOKEN"))
