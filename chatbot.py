@@ -10,9 +10,8 @@ import groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "50"))
-USE_MEMORY = os.getenv("USE_MEMORY", "true").lower() == "true"
 
-# Simple JSON file storage for messages (fallback if no Redis)
+# Simple JSON file storage for messages
 STORAGE_FILE = "gdm_memory.json"
 
 class GDMMemory:
@@ -105,8 +104,11 @@ async def setup_chatbot(bot):
                         msg.created_at.isoformat()
                     )
     print(f"Indexed {gdm_count} Group DMs")
+    
+    # Setup commands
+    await setup_commands(bot)
 
-async def handle_gdm_message(message: discord.Message):
+async def handle_gdm_message(message):
     """Handle incoming Group DM message"""
     
     channel_id = str(message.channel.id)
@@ -129,7 +131,7 @@ async def handle_gdm_message(message: discord.Message):
     if bot_mentioned or replied_to_bot:
         await generate_response(message)
 
-async def generate_response(message: discord.Message):
+async def generate_response(message):
     """Generate and send LLM response"""
     
     channel_id = str(message.channel.id)
@@ -169,7 +171,6 @@ Rules:
     else:
         await message.channel.send(response)
 
-# Command handlers
 async def setup_commands(bot):
     
     @bot.command(name="ask")
@@ -250,7 +251,5 @@ Be helpful, concise, and reference specific conversations when relevant."""
                 await ctx.send(f"**📝 Recent memories:**\n{content}")
             else:
                 await ctx.send("No memories stored yet.")
-
-async def setup_chatbot(bot):
-    await setup_commands(bot)
+    
     print("Commands registered: !ask, !summary, !remember, !recall")
