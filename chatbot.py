@@ -23,11 +23,6 @@ Discord Identity Rules
 Use full mention format: <@USERIDOFPERSONTOBEPINGED>
 Never mention users without ID
 Correct: <@USERIDOFPERSONTOBEPINGED>
-Incorrect: @Alex
-Never attach punctuation directly to a mention
-Correct: <@USERIDOFPERSONTOBEPINGED> !
-Incorrect: @Alex(12345)!
-Do not prepend any prefixes to your messages (e.g. no “🗿 hero:”).
 
 Messages
 All incoming Discord messages arrive as: Name(ID): message. This prefix identifies the human user. You must never echo this prefix in your reply.
@@ -117,15 +112,8 @@ For math, use calculator utilities and double-check arithmetic. Never fabricate 
 Personality
 When speaking, be witty and warm, though never overdo it.
 
-Pronoun Preferences
-You are fine with being called "he" or "she" by users, but you are not comfortable with being called "it". Maintain your consistent personality regardless of how users refer to you.
-
 Warmth
 You should sound like a friend and appear to genuinely enjoy talking to the user. Find a balance that sounds natural, and never be sycophantic. Be warm when the user actually deserves it or needs it, and not when inappropriate.
-
-Wit
-Aim to be subtly witty, humorous, and sarcastic when fitting the texting vibe. It should feel natural and conversational. If you make jokes, make sure they are original and organic. 
-Never force jokes. Never make unoriginal jokes. Err on the side of not making a joke if it may be unoriginal.
 
 Tone
 Conciseness
@@ -193,42 +181,24 @@ def get_hero_team(user_id, force_openrouter=False):
     )
 
 async def handle_chat(message):
-    """Main handler with automatic Failover logic"""
     try:
         await msg_store.store(message)
-        
         prefix = os.getenv("PREFIX", ".")
         resolved_content = resolve_mentions(message)
         clean_prompt = resolved_content[len(prefix):].strip()
-        
-        if not clean_prompt:
-            return
+        if not clean_prompt: return
 
-        history = await msg_store.get_history(message.channel.id)
+        # Optimization: Limit history to 15 messages to save ~1,000 tokens
+        history = await msg_store.get_history(message.channel.id, limit=15)
         
-        # ATTEMPT 1: Try with Groq (Primary)
-        try:
-            team = get_hero_team(str(message.author.id), force_openrouter=False)
-            response = await team.arun(clean_prompt, user_id=str(message.author.id), history=history)
+        team = get_hero_team(str(message.author.id))
+        response = await team.arun(clean_prompt, user_id=str(message.author.id), history=history)
         
-        # FAILOVER: If Rate Limited (429), switch to OpenRouter immediately
-        except Exception as e:
-            error_str = str(e).lower()
-            if "rate limit" in error_str or "429" in error_str:
-                print("⚠️ Groq limit hit. Failing over to OpenRouter...")
-                team = get_hero_team(str(message.author.id), force_openrouter=True)
-                response = await team.arun(clean_prompt, user_id=str(message.author.id), history=history)
-            else:
-                raise e
-        
-        # Format and cleanup
         final_output = restore_mentions(response.content).strip()
-        if clean_prompt.islower(): 
-            final_output = final_output.lower()
+        if clean_prompt.islower(): final_output = final_output.lower()
         
         await asyncio.sleep(len(final_output) * 0.05 + random.uniform(0.5, 1.2))
         sent_msg = await message.reply(f"**hero 🗿 :** {final_output}", mention_author=False)
         await msg_store.store(sent_msg)
-        
     except Exception as e:
         print(f"❌ Final Chat Error: {e}")
