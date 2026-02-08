@@ -1,44 +1,71 @@
+# chatbot.py
 import os
-import random
+import sqlite3
 import asyncio
-from discord.ext import commands
-from dotenv import load_dotenv
+import groq
+from datetime import datetime
 
-load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+client = groq.Groq(api_key=GROQ_API_KEY)
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-PREFIX = os.getenv("PREFIX", "!")
+class MessageStore:
+    def __init__(self, db_path="chat_memory.db"):
+        self.db_path = db_path
+        conn = sqlite3.connect(self.db_path)
+        # We added author_name to make searching easier
+        conn.execute('CREATE TABLE IF NOT EXISTS messages (channel_id TEXT, author_name TEXT, content TEXT, role TEXT, timestamp TEXT)')
+        conn.close()
 
-# Use the 'self_bot=True' for discord.py-self
-bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
+    def add(self, channel_id, author_name, content, role):
+        conn = sqlite3.connect(self.db_path)
+        # Use 'INSERT OR IGNORE' logic or just check if it exists to avoid duplicates
+        conn.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?)', 
+                     (channel_id, author_name, content, role, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
 
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user.name}")
-    print(f"📝 Use '{PREFIX}' to chat. Friends and you are both allowed!")
+    def search_history(self, channel_id, query_name):
+        conn = sqlite3.connect(self.db_path)
+        # Search specifically for what a certain person said
+        cursor = conn.execute('SELECT author_name, content FROM messages WHERE channel_id = ? AND author_name LIKE ? LIMIT 10', 
+                             (channel_id, f"%{query_name}%"))
+        rows = cursor.fetchall()
+        conn.close()
+        return "\n".join([f"{r[0]}: {r[1]}" for r in rows])
 
-@bot.event
-async def on_message(message):
-    # 🛑 CRITICAL: Check if the message is from the bot itself
-    # We only want to respond if the message starts with our PREFIX.
-    # If the AI sends a message that happens to start with '!', we stop it here.
-    if message.author.id == bot.user.id:
-        if not message.content.startswith(PREFIX):
-            return # Ignore my own AI responses
+    def get_recent(self, channel_id, limit=20):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.execute('SELECT author_name, content, role FROM messages WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?', (channel_id, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"role": r[2], "content": f"{r[0]}: {r[1]}" if r[2] == "user" else r[1]} for r in reversed(rows)]
+
+store = MessageStore()
+
+async def handle_chat(message, content):
+    channel_id = str(message.channel.id)
     
-    # Only process if it starts with the prefix
-    if not message.content.startswith(PREFIX):
-        return
+    # 1. Check if the user is asking about a specific person
+    relevant_past = ""
+    if "say" in content.lower() or "tell" in content.lower():
+        # Try to guess who they are asking about (simple version)
+        words = content.split()
+        potential_name = words[-1] # Usually the last word in "What did Alex say"
+        relevant_past = store.search_history(channel_id, potential_name)
 
-    content = message.content[len(PREFIX):].strip()
-    if not content:
-        return
-
-    # ⏳ Random jitter to prevent Discord "Self-Bot" detection
-    await asyncio.sleep(random.uniform(0.7, 1.5))
+    # 2. Get the standard recent context
+    history = store.get_recent(channel_id)
     
-    from chatbot import handle_chat
-    await handle_chat(message, content)
-
-if __name__ == "__main__":
-    bot.run(TOKEN)
+    # 3. Build the prompt
+    system_msg = f"You are a helpful assistant. Past info found: {relevant_past}"
+    
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "system", "content": system_msg}] + history
+        )
+        ai_text = response.choices[0].message.content.lstrip("!")
+        await message.reply(ai_text, mention_author=False)
+        store.add(channel_id, "AI", ai_text, "assistant")
+    except Exception as e:
+        print(f"Error: {e}")
