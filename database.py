@@ -1,28 +1,27 @@
-import sqlite3
-from datetime import datetime
+import os
+import discord
+from discord.ext import commands
+from dotenv import load_dotenv
+from database import msg_store
+from chatbot import handle_chat
 
-class MessageStore:
-    def __init__(self, db_path="chat_memory.db"):
-        self.db_path = db_path
-        conn = sqlite3.connect(self.db_path)
-        # Table stores metadata to differentiate users and judge their 'lore'
-        conn.execute('''CREATE TABLE IF NOT EXISTS messages 
-                     (channel_id TEXT, author_name TEXT, content TEXT, role TEXT, timestamp TEXT)''')
-        conn.close()
+load_dotenv()
+# Using self_bot=True is required for your discord.py-self setup
+bot = commands.Bot(command_prefix="!", self_bot=True)
 
-    def add(self, channel_id, author_name, content, role):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute('INSERT INTO messages VALUES (?, ?, ?, ?, ?)',
-                     (channel_id, author_name, content, role, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
+@bot.event
+async def on_ready():
+    # Properly initialize the store pool on startup
+    await msg_store.init()
+    print(f"✅ hero 🗿 online. Memory synced for {bot.user.name}.")
 
-    def get_history(self, channel_id, limit=30):
-        conn = sqlite3.connect(self.db_path)
-        # Fetch lore to verify identities and provide context
-        cursor = conn.execute('''SELECT author_name, content, role FROM messages 
-                                 WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?''', 
-                              (channel_id, limit))
-        rows = cursor.fetchall()
-        conn.close()
-        return [{"role": r[2], "content": f"{r[0]}: {r[1]}" if r[2] == "user" else r[1]} for r in reversed(rows)]
+@bot.event
+async def on_message(message):
+    # Ignore your own bot's responses but process your own manual commands
+    if message.author.id == bot.user.id and not message.content.startswith("!"):
+        return
+        
+    if message.content.startswith("!"):
+        await handle_chat(message)
+
+bot.run(os.getenv("DISCORD_TOKEN"))
