@@ -46,10 +46,11 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    if message.author.id == bot.user.id and not message.content.startswith(PREFIX):
+    # CRITICAL: Never respond to yourself, even if the message starts with "."
+    if message.author.id == bot.user.id:
         return
-    await bot.process_commands(message) # Enable commands like !tldr
-    if message.content.startswith(PREFIX) and not message.content.startswith(f"{PREFIX}tldr"):
-        await handle_chat(message)
+        
+    if message.content.startswith(PREFIX):
+        await handle_chat(message) 
 
-bot.run(os.getenv("DISCORD_TOKEN"))
+bot.run(TOKEN)
