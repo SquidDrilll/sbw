@@ -3,14 +3,14 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 load_dotenv()
-# Self-bot=True is required for user account tokens
+# Using the self-bot wrapper library
 bot = commands.Bot(command_prefix=os.getenv("PREFIX", "!"), self_bot=True)
 
-async def harvest_history():
-    """Builds initial lore memory on startup (last 100 msgs)"""
+async def harvest_lore():
+    """Builds initial 100-message lore database on startup"""
     await bot.wait_until_ready()
     from chatbot import store
-    print("🗿 hero is learning the lore...")
+    print("🗿 hero is learning the lore... please wait.")
     
     for channel in bot.private_channels:
         try:
@@ -19,16 +19,17 @@ async def harvest_history():
                 store.add(str(channel.id), str(msg.author.name), msg.content, role)
             await asyncio.sleep(0.5)
         except: continue
-    print("✨ lore learned.")
+    print("✨ lore learned. hero is ready to judge.")
 
 @bot.event
 async def on_ready():
-    print(f"✅ hero online as {bot.user.name}")
-    bot.loop.create_task(harvest_history())
+    print(f"✅ hero online: {bot.user.name}")
+    # Start background lore harvesting
+    bot.loop.create_task(harvest_lore())
 
 @bot.event
 async def on_message(message):
-    # Ignore own AI responses to prevent loops
+    # Identity protection: ignore self-bot responses
     if message.author.id == bot.user.id:
         if not message.content.startswith("!"): return
 
@@ -36,7 +37,7 @@ async def on_message(message):
 
     content = message.content[1:].strip().lower()
 
-    # Manual deep pull command
+    # Deep Harvest command
     if content == "pull":
         from chatbot import backfill_history
         await backfill_history(message, bot)
