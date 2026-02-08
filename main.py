@@ -15,14 +15,8 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not TOKEN or not GROQ_API_KEY:
     raise ValueError("DISCORD_TOKEN and GROQ_API_KEY are required")
 
-# Discord selfbot setup (user account, not bot account)
-intents = discord.Intents.all()
-intents.members = True
-intents.message_content = True
-intents.guilds = True
-intents.dm_channels = True
-
-bot = commands.Bot(command_prefix=PREFIX, intents=intents, self_bot=True)
+# discord.py-self uses Client differently - no Intents needed in the same way
+bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
 
 @bot.event
 async def on_ready():
