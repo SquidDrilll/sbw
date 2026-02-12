@@ -4,7 +4,6 @@ from core.config import *
 from core.database import db_manager
 from core.execution_context import set_current_channel
 from agent.agent_factory import create_hero_agent
-# FIXED IMPORT: Pointing to the file within the same package
 from discord_bot.discord_utils import resolve_mentions, restore_mentions
 from discord_bot.context_cache import build_history_string
 
@@ -16,23 +15,27 @@ def is_blacklisted(key):
         return True
     return False
 
-async def handle_chat(message):
+async def handle_chat(message, bot_id):
     try:
-        # 1. Persistence
-        await db_manager.store_message(
-            message.id, message.channel.id, message.author.id, 
-            message.author.display_name, message.clean_content, message.created_at
-        )
         set_current_channel(message.channel)
         
         prompt = resolve_mentions(message)[len(PREFIX):].strip()
         if not prompt: return
 
-        # 2. Vision & History
-        images = [Image(url=a.url) for a in message.attachments if a.content_type and "image" in a.content_type]
-        history_str = await build_history_string(message.channel.id)
+        # 1. Fetch History FIRST (excluding current message) - Fixes "Echo Chamber"
+        # We pass the bot's ID so it knows which messages are its own
+        history_str = await build_history_string(message.channel.id, bot_id)
 
-        # 3. Failover Execution
+        # 2. Store Incoming Message (After fetching history)
+        await db_manager.store_message(
+            message.id, message.channel.id, message.author.id, 
+            message.author.display_name, message.clean_content, message.created_at
+        )
+
+        # 3. Vision
+        images = [Image(url=a.url) for a in message.attachments if a.content_type and "image" in a.content_type]
+
+        # 4. Failover Execution
         keys = [
             (os.getenv("GROQ_API_KEY_1"), False, "Groq-1"),
             (os.getenv("GROQ_API_KEY_2"), False, "Groq-2"),
@@ -44,12 +47,13 @@ async def handle_chat(message):
         for key, is_or, name in keys:
             if not key or is_blacklisted(key): continue
             
-            # Sub-Failover: Primary -> 8B Fallback -> Vision
+            # Model Selection
             models = [None] if not images else [GROQ_VISION_MODEL]
             if not is_or and not images: models.append(GROQ_MEMORY_MODEL)
 
             for m_id in models:
                 try:
+                    # Pass is_owner=True if you want owner-specific logic, but basic chat works for all
                     agent = create_hero_agent(key, history_str, model_id=m_id, is_openrouter=is_or)
                     response = await agent.arun(prompt, user_id=str(message.author.id), images=images if images else None)
                     
@@ -65,10 +69,9 @@ async def handle_chat(message):
                     continue
             if response and response.content and "rate limit" not in response.content.lower(): break
 
-        # 4. Reply
+        # 5. Reply & Store Response
         if response and response.content:
             final = restore_mentions(response.content)
-            await asyncio.sleep(len(final) * 0.01 + 0.5)
             sent = await message.reply(f"**hero 🗿 :** {final}", mention_author=False)
             await db_manager.store_message(
                 sent.id, sent.channel.id, sent.author.id, 
