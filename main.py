@@ -20,7 +20,6 @@ handler.setFormatter(JSONFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger("Main")
 
-# self_bot=True is essential for personal account automation
 bot = commands.Bot(command_prefix=PREFIX, self_bot=True, help_command=None)
 
 bio_tools_instance = None
@@ -30,27 +29,36 @@ async def index_historical_messages():
     Scans all accessible channels and reads the last 500 messages 
     on startup to build 'Global Memory'.
     """
+    await bot.wait_until_ready()
     logger.info("🧠 Hero is starting historical indexing...")
     total_indexed = 0
     
-    for channel in bot.private_channels + [c for g in bot.guilds for c in g.text_channels]:
+    # FIX: Convert SequenceProxy to a list before concatenating
+    all_channels = list(bot.private_channels)
+    for guild in bot.guilds:
+        # Filter for text channels the bot can actually read
+        all_channels.extend(guild.text_channels)
+
+    for channel in all_channels:
         try:
-            # Check permissions if in a guild
-            if hasattr(channel, 'permissions_for'):
+            # Check permissions for guild channels
+            if hasattr(channel, 'guild') and channel.guild:
                 perms = channel.permissions_for(channel.guild.me)
-                if not perms.read_message_history or not perms.read_messages:
+                if not perms or not perms.read_message_history:
                     continue
 
             async for msg in channel.history(limit=500):
-                await db_manager.store_message(
-                    msg.id, msg.channel.id, msg.author.id,
-                    msg.author.display_name, msg.content, msg.created_at
-                )
-                total_indexed += 1
+                # We only index messages with content to save DB space and tokens
+                if msg.content:
+                    await db_manager.store_message(
+                        msg.id, msg.channel.id, msg.author.id,
+                        msg.author.display_name, msg.content, msg.created_at
+                    )
+                    total_indexed += 1
         except Exception:
             continue
             
-    logger.info(f"✅ Indexing complete. Memorized {total_indexed} messages across all servers.")
+    logger.info(f"✅ Indexing complete. Memorized {total_indexed} messages.")
 
 @bot.event
 async def on_ready():
@@ -60,24 +68,25 @@ async def on_ready():
     
     bio_tools_instance = BioTools(bot)
     
-    # Start the indexing in the background so the bot is usable immediately
+    # Run indexing in background to avoid blocking the bot's availability
     asyncio.create_task(index_historical_messages())
     logger.info("🚀 Hero Companion initialized and thinking.")
 
 @bot.event
 async def on_message(message):
-    # Always log messages Hero sees to keep memory fresh
-    await db_manager.store_message(
-        message.id, message.channel.id, message.author.id, 
-        message.author.display_name, message.content, message.created_at
-    )
+    # Log everything to keep memories fresh
+    if message.content:
+        await db_manager.store_message(
+            message.id, message.channel.id, message.author.id, 
+            message.author.display_name, message.content, message.created_at
+        )
 
     if message.author.id == bot.user.id:
         if message.content.startswith(PREFIX):
             await handle_chat(message, bot, bio_tools_instance)
         return
 
-    # Trigger chat if prefixed or mentioned
+    # Respond to prefix or direct mentions
     if message.content.startswith(PREFIX) or bot.user.mentioned_in(message):
         await handle_chat(message, bot, bio_tools_instance)
 
