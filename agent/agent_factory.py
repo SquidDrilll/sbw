@@ -3,9 +3,10 @@ from datetime import datetime
 from agno.agent import Agent
 from agno.models.openai import OpenAILike
 from agno.memory.manager import MemoryManager
+from agno.tools import Toolkit
 from exa_py import Exa
 from core.config import *
-from tools.bio_tools import BioTools
+from typing import Optional
 
 # Import Firecrawl
 try:
@@ -16,7 +17,6 @@ except ImportError:
 logger = logging.getLogger("AgentFactory")
 
 # --- GLOBAL TOOL CLIENTS (Initialize Once) ---
-# This prevents re-connection overhead on every single message
 exa_client = Exa(api_key=EXA_API_KEY) if EXA_API_KEY else None
 firecrawl_client = FirecrawlApp(api_key=FIRECRAWL_API_KEY) if FIRECRAWL_API_KEY and FirecrawlApp else None
 
@@ -27,7 +27,8 @@ def web_search(query: str, entity: str = None, **kwargs) -> str:
         response = exa_client.search_and_contents(query, num_results=EXA_NUM_RESULTS, use_autoprompt=True, text=True)
         return str(response)
     except Exception as e:
-        return f"Search failed: {e}"
+        logger.error(f"Exa search failed: {e}")
+        return "Error: Web search failed."
 
 def scrape_website(url: str, **kwargs) -> str:
     """Scrape website using the global client."""
@@ -36,10 +37,20 @@ def scrape_website(url: str, **kwargs) -> str:
         result = firecrawl_client.scrape_url(url, params={'formats': ['markdown']})
         return result.get('markdown', 'No content.')[:SCRAPE_MAX_CHARS]
     except Exception as e:
-        return f"Scraping failed: {e}"
+        logger.error(f"Firecrawl scrape failed: {e}")
+        return "Error: Website scraping failed."
 
-def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_openrouter: bool = False):
-    """Creates the production-grade Hero Agent."""
+def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_openrouter: bool = False, bio_tools: Optional[Toolkit] = None):
+    """
+    Creates the production-grade Hero Agent.
+    
+    Args:
+        api_key: The LLM API key.
+        history_str: Context string.
+        model_id: Model identifier.
+        is_openrouter: Boolean flag for OpenRouter.
+        bio_tools: Pre-initialized BioTools instance (Optimization).
+    """
     
     if is_openrouter:
         base_url = "https://openrouter.ai/api/v1"
@@ -56,10 +67,15 @@ def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_o
     # Use persona from config
     persona = PERSONA_TEXT
     
+    # Compile tools list
+    tools = [web_search, scrape_website]
+    if bio_tools:
+        tools.append(bio_tools)
+
     return Agent(
         model=chat_model,
         memory_manager=MemoryManager(model=memory_model),
-        tools=[web_search, scrape_website, BioTools()],
+        tools=tools,
         instructions=f"{persona}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%H:%M:%S')}\n\nContext:\n{history_str}",
         markdown=True
     )
