@@ -1,4 +1,4 @@
-import os, asyncio, time, logging
+import os, asyncio, time, logging, discord
 from agno.media import Image
 from core.config import *
 from core.database import db_manager
@@ -15,18 +15,25 @@ def is_blacklisted(key):
         return True
     return False
 
-async def handle_chat(message, bot_id):
+async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
+    """
+    Handles chat interaction.
+    
+    Args:
+        message: The Discord message object.
+        bot: The Discord client instance.
+        bio_tools: Pre-initialized BioTools instance.
+    """
     try:
         set_current_channel(message.channel)
         
         prompt = resolve_mentions(message)[len(PREFIX):].strip()
         if not prompt: return
 
-        # 1. Fetch History FIRST (excluding current message) - Fixes "Echo Chamber"
-        # We pass the bot's ID so it knows which messages are its own
-        history_str = await build_history_string(message.channel.id, bot_id)
+        # 1. Fetch History FIRST (excluding current message)
+        history_str = await build_history_string(message.channel.id, bot.user.id)
 
-        # 2. Store Incoming Message (After fetching history)
+        # 2. Store Incoming Message
         await db_manager.store_message(
             message.id, message.channel.id, message.author.id, 
             message.author.display_name, message.clean_content, message.created_at
@@ -53,8 +60,15 @@ async def handle_chat(message, bot_id):
 
             for m_id in models:
                 try:
-                    # Pass is_owner=True if you want owner-specific logic, but basic chat works for all
-                    agent = create_hero_agent(key, history_str, model_id=m_id, is_openrouter=is_or)
+                    # Pass the pre-initialized bio_tools instance here
+                    agent = create_hero_agent(
+                        key, 
+                        history_str, 
+                        model_id=m_id, 
+                        is_openrouter=is_or,
+                        bio_tools=bio_tools
+                    )
+                    
                     response = await agent.arun(prompt, user_id=str(message.author.id), images=images if images else None)
                     
                     if response and response.content:
