@@ -10,8 +10,16 @@ from discord_utils import resolve_mentions, restore_mentions
 from agno.memory.manager import MemoryManager
 
 # --- IMPORTS FROM YOUR FOLDERS ---
-from core.execution_context import set_current_channel
-from tools.bio_tools import BioTools
+# NOTE: Ensure you have created 'core/execution_context.py' and 'tools/bio_tools.py'
+try:
+    from core.execution_context import set_current_channel
+    from tools.bio_tools import BioTools
+except ImportError as e:
+    print(f"❌ Import Error: {e}")
+    print("⚠️ Make sure you created the 'core' and 'tools' folders with the required files!")
+    # Dummy fallbacks to prevent immediate crash if files missing
+    def set_current_channel(c): pass
+    BioTools = None
 
 # Import Firecrawl
 try:
@@ -103,22 +111,22 @@ def get_hero_agent(user_id, api_key, history_str, is_openrouter=False, specific_
         chat_model_id = specific_model
 
     chat_model = OpenAILike(id=chat_model_id, base_url=base_url, api_key=api_key)
-    # Memory model uses same key, so it shares the fate of the chat model
     memory_model = OpenAILike(id=memory_model_id, base_url=base_url, api_key=api_key)
+
+    # Compile tools list
+    tools_list = [web_search, scrape_website]
+    if BioTools:
+        tools_list.append(BioTools())
 
     # Single Agent with ALL capabilities
     return Agent(
         model=chat_model,
-        # Direct Memory Access - FIXED: REMOVED db=db
-        # We disabled the database here because the current version of 'agno' crashes 
-        # when using AsyncPostgresDb with the MemoryManager (async/await bug).
-        # Context is handled via 'history_str' injection, so this is safe.
+        # REMOVED db=db to prevent async crash
         memory_manager=MemoryManager(model=memory_model), 
-        # ALL TOOLS REGISTERED DIRECTLY
-        tools=[web_search, scrape_website, BioTools()], 
+        tools=tools_list, 
         instructions=persona + f"\n\nCurrent Context:\n{history_str}\nTime: {datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')}",
-        markdown=True,
-        prevent_hallucinations=True 
+        markdown=True
+        # CLEANED: Removed all deprecated params causing crashes
     )
 
 async def handle_chat(message):
@@ -130,12 +138,14 @@ async def handle_chat(message):
         prompt = resolve_mentions(message)[len(prefix):].strip()
         if not prompt: return
 
-        # Vision
+        # Vision Processing
         images = []
+        has_images = False
         if message.attachments:
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith('image/'):
                     images.append(Image(url=attachment.url))
+                    has_images = True
                     print(f"👁️ Found image: {attachment.url}")
 
         # Lore
@@ -166,14 +176,18 @@ async def handle_chat(message):
                 continue
             
             # Models to try on this key
-            models = [None] 
+            models = [None] # None = Default
             if not is_or: models.append("llama-3.1-8b-instant")
             
-            key_is_dead = False # Flag to blacklist key if TPD limit hit
+            # VISION OVERRIDE: If images exist, FORCE a vision-capable model
+            if has_images and not is_or:
+                models = ["llama-3.2-90b-vision-preview"]
+            
+            key_is_dead = False 
 
             for model_id in models:
                 try:
-                    current_model = model_id if model_id else "Default"
+                    current_model = model_id if model_id else "Default (Text-Only)"
                     
                     agent = get_hero_agent(
                         str(message.author.id), 
@@ -201,11 +215,10 @@ async def handle_chat(message):
                                 print(f"⛔ Daily Limit hit on {key_name}. Blacklisting for 1 hour.")
                                 blacklist_key(key)
                                 key_is_dead = True
-                                break # Stop trying models on this dead key
+                                break 
                             
-                            continue # Try next model
+                            continue 
                         
-                        # Check for Tool Error Text
                         if "failed to call a function" in content_lower:
                             print(f"⚠️ Tool error on {key_name}. Retrying...")
                             continue
@@ -217,12 +230,18 @@ async def handle_chat(message):
 
                 except Exception as e:
                     err = str(e).lower()
+                    
+                    # CATCH CONFIG ERRORS (Fatal)
                     if "unexpected keyword argument" in err:
-                         # Fallback if prevent_hallucinations is also broken in your version
                          print(f"❌ Config Error on {key_name}: {e}")
-                         # We stop here because this is a code error, not a key error
                          break 
+                    
+                    # CATCH MODEL ERRORS (Vision mismatch)
+                    if "does not support" in err and "image" in err:
+                         print(f"⚠️ Model {current_model} cannot see images. Trying next...")
+                         continue
 
+                    # CATCH RATE LIMITS
                     if "429" in err or "rate limit" in err:
                         if "per day" in err or "quota" in err:
                             print(f"⛔ Daily Limit exception on {key_name}. Blacklisting.")
@@ -236,9 +255,9 @@ async def handle_chat(message):
                         print(f"❌ Error on {key_name}: {e}")
                         continue
 
-            if key_is_dead: continue # Move to next key immediately
+            if key_is_dead: continue 
             if response and response.content and "rate limit" not in response.content.lower():
-                break # We have a good response, stop everything
+                break 
 
         # Send
         if response and response.content:
