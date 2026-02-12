@@ -43,13 +43,6 @@ def scrape_website(url: str, **kwargs) -> str:
 def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_openrouter: bool = False, bio_tools: Optional[Toolkit] = None):
     """
     Creates the production-grade Hero Agent.
-    
-    Args:
-        api_key: The LLM API key.
-        history_str: Context string.
-        model_id: Model identifier.
-        is_openrouter: Boolean flag for OpenRouter.
-        bio_tools: Pre-initialized BioTools instance (Optimization).
     """
     
     if is_openrouter:
