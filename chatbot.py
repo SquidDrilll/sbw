@@ -354,7 +354,15 @@ async def handle_chat(message):
                     user_id=str(message.author.id),
                     images=images if images else None
                 )
-                if response: break 
+                
+                # FIXED: Check if response has valid content. 
+                # Agno often swallows exceptions (like 429) and returns an empty/None response.
+                # We must NOT break if the content is empty, so it falls through to the next key.
+                if response and response.content: 
+                    break
+                else:
+                    print("⚠️ Response empty or failed (internal error). Switching keys...")
+                    
             except Exception as e:
                 err = str(e).lower()
                 if any(x in err for x in ["429", "rate limit", "400", "tool_use", "validation failed", "413"]):
@@ -362,9 +370,10 @@ async def handle_chat(message):
                     continue
                 else: 
                     print(f"❌ Unexpected Error: {e}")
-                    raise e
+                    # Try next key anyway in case it was a transient provider error
+                    continue
 
-        if response:
+        if response and response.content:
             final = restore_mentions(response.content).strip()
             if prompt.islower(): final = final.lower()
             
