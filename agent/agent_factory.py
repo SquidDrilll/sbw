@@ -27,14 +27,8 @@ exa_client = Exa(api_key=EXA_API_KEY) if EXA_API_KEY else None
 firecrawl_client = FirecrawlApp(api_key=FIRECRAWL_API_KEY) if FIRECRAWL_API_KEY and FirecrawlApp else None
 
 def web_search(query: str) -> str:
-    """
-    Search the web for real-time information.
-    Args:
-        query (str): The search query.
-    """
     if not exa_client: return "Error: Exa Client not initialized."
     try:
-        # STRICT CALL: No autoprompt, no extra args. Just search.
         response = exa_client.search_and_contents(query, num_results=EXA_NUM_RESULTS, text=True)
         return str(response)
     except Exception as e:
@@ -42,11 +36,6 @@ def web_search(query: str) -> str:
         return "Error: Web search failed."
 
 def scrape_website(url: str) -> str:
-    """
-    Scrape a website to read its content.
-    Args:
-        url (str): The URL to scrape.
-    """
     if not firecrawl_client: return "Error: Firecrawl Client not initialized."
     try:
         result = firecrawl_client.scrape_url(url, params={'formats': ['markdown']})
@@ -57,42 +46,42 @@ def scrape_website(url: str) -> str:
 
 def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_openrouter: bool = False, bio_tools: Optional[Toolkit] = None):
     """
-    Creates the production-grade Hero Agent.
+    Creates the Hero Agent with fixed Model ID handling for OpenRouter.
     """
     
     if is_openrouter:
         base_url = "https://openrouter.ai/api/v1"
+        # Ensure model ID includes provider prefix if not present
         chat_model_id = model_id or OPENROUTER_MODEL
+        if "/" not in chat_model_id:
+            chat_model_id = f"meta-llama/{chat_model_id}"
+            
         memory_model_id = os.getenv("OPENROUTER_MEMORY_MODEL", "meta-llama/llama-3.1-8b-instruct")
     else:
         base_url = "https://api.groq.com/openai/v1"
         chat_model_id = model_id or GROQ_MODEL
         memory_model_id = GROQ_MEMORY_MODEL
 
-    # FIX: Temperature is set HERE on the model, not the Agent
+    # Temperature and Model Config
     chat_model = OpenAILike(
         id=chat_model_id, 
         base_url=base_url, 
         api_key=api_key,
-        temperature=0.5  # Stability fix for tool calling
+        temperature=0.5
     )
     
     memory_model = OpenAILike(
         id=memory_model_id, 
         base_url=base_url, 
         api_key=api_key,
-        temperature=0.1 # Low temp for factual memory
+        temperature=0.1
     )
 
-    # Use persona from config
     persona = PERSONA_TEXT
-    
-    # Compile tools list
     tools = [web_search, scrape_website]
     if bio_tools:
         tools.append(bio_tools)
 
-    # --- STORAGE SETUP ---
     storage = None
     if PgAgentStorage and POSTGRES_URL:
         try:
@@ -110,7 +99,6 @@ def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_o
         "tools": tools,
         "instructions": f"{persona}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%Y-%m-%d %H:%M:%S %Z')}\n\nContext:\n{history_str}",
         "markdown": True
-        # REMOVED: "temperature": 0.5 (Caused the crash)
     }
 
     if storage:
