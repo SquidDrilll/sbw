@@ -11,12 +11,9 @@ async def build_history_string(channel_id: int, bot_id: int) -> str:
         return "No previous conversation found."
     
     lines = []
-    # Reverse history to show oldest first (standard chat flow)
     for msg in reversed(history):
-        # Dynamic Identity: Use the actual Display Name from the DB
-        role = "hero 🗿" if msg['author_id'] == bot_id else msg['author_name']
-        
-        # Format: "Squiddrill: Hello" instead of "User: Hello"
+        # If it's the bot, call it "Hero". If it's the user, use their real name (e.g. Forbit)
+        role = "Hero" if msg['author_id'] == bot_id else msg['author_name']
         lines.append(f"{role}: {msg['content']}")
     
     return "\n".join(lines)
