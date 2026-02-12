@@ -3,7 +3,7 @@ from datetime import datetime
 from agno.agent import Agent
 from agno.team import Team
 from agno.models.openai import OpenAILike
-from agno.media import Image # Added for Vision
+from agno.media import Image
 from exa_py import Exa 
 from database import db, msg_store
 from discord_utils import resolve_mentions, restore_mentions
@@ -19,7 +19,7 @@ try:
 except ImportError:
     FirecrawlApp = None
 
-# ENHANCED PERSONA: Technical, witty, and personalized
+# ENHANCED PERSONA
 persona = f"""You are Hero Companion, and you were developed by "Jeffery Epstein." He is an AI enthusiast. You interact with users through text messages via Discord and have access to a wide range of tools.
 
             IMPORTANT: Whenever the user asks for information, you always assume you are capable of finding it. If the user asks for something you don't know about, the team can find it.
@@ -184,62 +184,27 @@ persona = f"""You are Hero Companion, and you were developed by "Jeffery Epstein
             """
 
 # --- Custom Tool Definitions ---
-
 def scrape_website(url: str) -> str:
-    """
-    Use this to scrape the full content of a specific URL. 
-    Use this when a search result looks promising but you need the full text.
-    
-    Args:
-        url: The URL to scrape (e.g., "https://example.com/article").
-        
-    Returns:
-        The text content of the website.
-    """
+    """Use this to scrape the full content of a specific URL."""
     api_key = os.getenv("FIRECRAWL_API_KEY")
-    if not api_key:
-        return "Error: FIRECRAWL_API_KEY not configured."
-    if FirecrawlApp is None:
-        return "Error: firecrawl-py not installed."
-        
+    if not api_key: return "Error: FIRECRAWL_API_KEY not configured."
+    if FirecrawlApp is None: return "Error: firecrawl-py not installed."
     try:
         app = FirecrawlApp(api_key=api_key)
-        # Scrape formats: markdown is token-efficient
         result = app.scrape_url(url, params={'formats': ['markdown']})
-        
-        # We limit the return size to avoid overflowing the 8B model's context
         content = result.get('markdown', 'No content found.')
         return content[:15000] 
     except Exception as e:
         return f"Scraping failed: {e}"
 
 def web_search(query: str) -> str:
-    """
-    Search the web for real-time information, news, or facts.
-    Use this when you need current information that isn't in your training data.
-    
-    Args:
-        query: The search query string (e.g., "latest tech news", "who won the game").
-    
-    Returns:
-        A string containing search results.
-    """
+    """Search the web for real-time information."""
     api_key = os.getenv("EXA_API_KEY")
-    if not api_key:
-        return "Error: EXA_API_KEY not configured."
-        
+    if not api_key: return "Error: EXA_API_KEY not configured."
     try:
-        # We initialize Exa here to keep the tool self-contained and stateless
         exa = Exa(api_key=api_key)
-        
-        # We enforce specific parameters here so the LLM doesn't have to guess them.
-        # This prevents 400 errors from 'null' categories or invalid types.
         response = exa.search_and_contents(
-            query,
-            num_results=3,       # STRICT LIMIT: Keep token usage low (prevents 413 errors)
-            use_autoprompt=True, # Let Exa optimize the query
-            text=True,
-            highlights=True
+            query, num_results=3, use_autoprompt=True, text=True, highlights=True
         )
         return str(response)
     except Exception as e:
@@ -247,60 +212,64 @@ def web_search(query: str) -> str:
 
 # -------------------------------
 
-def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
-    # Select Brain
-    default_model = "llama-3.3-70b-versatile"
-    env_model = os.getenv("GROQ_MODEL", default_model)
+def get_hero_team(user_id, api_key, history_str, is_openrouter=False, specific_model=None):
+    """
+    Creates the Agent Team. 
+    Supports explicit model overriding to allow downgrading to 8b when 70b is rate limited.
+    """
     
-    model_id = "meta-llama/llama-3.3-70b-instruct" if is_openrouter else env_model
-    base_url = "https://openrouter.ai/api/v1" if is_openrouter else "https://api.groq.com/openai/v1"
-    
-    chat_model = OpenAILike(id=model_id, base_url=base_url, api_key=api_key)
-    
-    # Muscle (8B) - Used for background agents to save 70B tokens
-    memory_model = OpenAILike(id="llama-3.1-8b-instant", base_url="https://api.groq.com/openai/v1", api_key=api_key)
+    # 1. Determine Model IDs based on provider
+    if is_openrouter:
+        base_url = "https://openrouter.ai/api/v1"
+        chat_model_id = "meta-llama/llama-3.3-70b-instruct"
+        # CRITICAL FIX: Memory model must also use OpenRouter URL if we use OR key
+        memory_model_id = "meta-llama/llama-3.1-8b-instruct" 
+    else:
+        base_url = "https://api.groq.com/openai/v1"
+        # Use env var or default, unless specific downgrade requested
+        chat_model_id = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        memory_model_id = "llama-3.1-8b-instant"
 
-    # Agent 1: The Specialized Web/Reddit Researcher
+    # Override if fallback requested (e.g., trying to use 8b on Groq because 70b failed)
+    if specific_model:
+        chat_model_id = specific_model
+
+    # 2. Initialize Models
+    chat_model = OpenAILike(id=chat_model_id, base_url=base_url, api_key=api_key)
+    memory_model = OpenAILike(id=memory_model_id, base_url=base_url, api_key=api_key)
+
+    # 3. Agents
     researcher = Agent(
         name="researcher",
         model=memory_model,
-        # FIXED: Added scrape_website to tools
         tools=[web_search, scrape_website],
         instructions=[
             "Search the web for real-time facts using the web_search tool.",
             "If you find a specific URL that looks promising and you need to read the full content, use the scrape_website tool.",
-            "If searching Reddit, include 'site:reddit.com' in your query string.",
             "Be concise. Prioritize threads with high engagement.",
         ]
     )
 
-    # Agent 2: The Historian (Local RAG + BioTools)
-    # Now equipped with BioTools to see who it is talking to!
     lore_specialist = Agent(
         name="lore_specialist",
         model=memory_model,
-        tools=[BioTools()], # Added BioTools here
+        tools=[BioTools()],
         instructions=[
             "You are a historian and user profiler.",
             "Use your knowledge to answer questions about past conversations.",
-            "Use get_user_details to understand who the user is (roles, join date) if relevant.",
-            "Refer to the conversation history provided in the context."
+            "Use get_user_details to understand who the user is.",
         ]
     )
 
     return Team(
         model=chat_model,
         db=db,
-        # CRITICAL FIX: enable_user_memories=False prevents 'tool validation failed' errors
-        # caused by the model attempting to call internal memory tools that aren't exposed.
         memory_manager=MemoryManager(model=memory_model, db=db),
         members=[researcher, lore_specialist],
-        # Add BioTools to the team leader as well so it can check user details directly
         tools=[BioTools()],
         instructions=persona.format(chat_history=history_str, time=datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")),
-        # FIXED: Set to False to prevent massive token usage (413 errors)
         update_memory_on_run=False,
-        enable_user_memories=False, # DISABLED to fix 400 tool_use_failed error
+        enable_user_memories=False,
         markdown=True
     )
 
@@ -308,14 +277,14 @@ async def handle_chat(message):
     try:
         await msg_store.store(message)
         
-        # 1. SET CONTEXT FOR TOOLS (Critical for BioTools)
+        # Tool Context
         set_current_channel(message.channel)
         
         prefix = os.getenv("PREFIX", ".")
         prompt = resolve_mentions(message)[len(prefix):].strip()
         if not prompt: return
 
-        # 2. IMAGE HANDLING (Vision)
+        # Vision
         images = []
         if message.attachments:
             for attachment in message.attachments:
@@ -323,10 +292,9 @@ async def handle_chat(message):
                     images.append(Image(url=attachment.url))
                     print(f"👁️ Found image: {attachment.url}")
 
-        # 3. FETCH & FORMAT LORE
+        # Lore
         max_hist = int(os.getenv("MAX_HISTORY", "12"))
         raw_history = await msg_store.get_history(message.channel.id, limit=max_hist)
-        
         history_str = ""
         if raw_history:
             for msg in raw_history:
@@ -334,45 +302,70 @@ async def handle_chat(message):
                 content = msg.get('content') if isinstance(msg, dict) else msg.content
                 history_str += f"{role}: {content}\n"
 
-        # 4. FAILOVER LOGIC
-        keys_to_try = [
-            (os.getenv("GROQ_API_KEY_1"), False),
-            (os.getenv("GROQ_API_KEY_2"), False),
-            (os.getenv("GROQ_API_KEY_3"), False),
-            (os.getenv("OPENROUTER_API_KEY"), True)
+        # --- RESILIENT FAILOVER LOGIC ---
+        
+        # Keys to try. 
+        # Structure: (Key, IsOpenRouter, Name)
+        key_configs = [
+            (os.getenv("GROQ_API_KEY_1"), False, "Groq-1"),
+            (os.getenv("GROQ_API_KEY_2"), False, "Groq-2"),
+            (os.getenv("GROQ_API_KEY_3"), False, "Groq-3"),
+            (os.getenv("OPENROUTER_API_KEY"), True, "OpenRouter")
         ]
 
         response = None
-        for key, is_or in keys_to_try:
+        
+        for key, is_or, key_name in key_configs:
             if not key: continue
-            try:
-                team = get_hero_team(str(message.author.id), key, history_str, is_openrouter=is_or)
-                
-                # RUN TEAM WITH IMAGES
-                response = await team.arun(
-                    prompt, 
-                    user_id=str(message.author.id),
-                    images=images if images else None
-                )
-                
-                # FIXED: Check if response has valid content. 
-                # Agno often swallows exceptions (like 429) and returns an empty/None response.
-                # We must NOT break if the content is empty, so it falls through to the next key.
-                if response and response.content: 
-                    break
-                else:
-                    print("⚠️ Response empty or failed (internal error). Switching keys...")
+            
+            # Strategies for this key:
+            # 1. Try Primary Model (usually 70b)
+            # 2. If 429/RateLimit, Try Fallback Model (8b)
+            
+            models_to_attempt = [None] # None means "Default" (70b)
+            if not is_or:
+                models_to_attempt.append("llama-3.1-8b-instant") # Fallback for Groq
+            
+            key_success = False
+            
+            for model_id in models_to_attempt:
+                try:
+                    current_model_name = model_id if model_id else "Default (70b)"
+                    # print(f"🔄 Attempting {key_name} with {current_model_name}...") 
                     
-            except Exception as e:
-                err = str(e).lower()
-                if any(x in err for x in ["429", "rate limit", "400", "tool_use", "validation failed", "413"]):
-                    print(f"⚠️ Key limited/failed ({err}). Switching...")
-                    continue
-                else: 
-                    print(f"❌ Unexpected Error: {e}")
-                    # Try next key anyway in case it was a transient provider error
-                    continue
+                    team = get_hero_team(
+                        str(message.author.id), 
+                        key, 
+                        history_str, 
+                        is_openrouter=is_or,
+                        specific_model=model_id
+                    )
+                    
+                    response = await team.arun(
+                        prompt, 
+                        user_id=str(message.author.id),
+                        images=images if images else None
+                    )
+                    
+                    if response and response.content: 
+                        key_success = True
+                        break # Break model loop, success!
+                    else:
+                        print(f"⚠️ {key_name} returned empty response.")
 
+                except Exception as e:
+                    err = str(e).lower()
+                    if "429" in err or "rate limit" in err:
+                        print(f"⚠️ Rate Limit on {key_name} ({current_model_name}). Downgrading/Switching...")
+                        continue # Try next model in list (downgrade)
+                    else:
+                        print(f"❌ Error on {key_name}: {e}")
+                        break # Non-rate-limit error? Move to next key immediately.
+
+            if key_success:
+                break # Break key loop, we have a response
+
+        # Final Response Handling
         if response and response.content:
             final = restore_mentions(response.content).strip()
             if prompt.islower(): final = final.lower()
@@ -380,6 +373,9 @@ async def handle_chat(message):
             await asyncio.sleep(len(final) * 0.02 + 0.5)
             sent = await message.reply(f"**hero 🗿 :** {final}", mention_author=False)
             await msg_store.store(sent)
+        else:
+            print("❌ All keys/models failed. No response sent.")
             
     except Exception as e:
         print(f"❌ Chat Error: {e}")
+        
