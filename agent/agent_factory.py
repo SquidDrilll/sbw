@@ -16,6 +16,7 @@ except ImportError:
 logger = logging.getLogger("AgentFactory")
 
 # --- GLOBAL TOOL CLIENTS (Initialize Once) ---
+# This prevents re-connection overhead on every single message
 exa_client = Exa(api_key=EXA_API_KEY) if EXA_API_KEY else None
 firecrawl_client = FirecrawlApp(api_key=FIRECRAWL_API_KEY) if FIRECRAWL_API_KEY and FirecrawlApp else None
 
