@@ -4,33 +4,35 @@ from core.config import *
 from core.database import db_manager
 from core.execution_context import set_current_channel
 from agent.agent_factory import create_hero_agent
-from discord_utils import resolve_mentions, restore_mentions
+# FIXED IMPORT: Pointing to the file within the same package
+from discord_bot.discord_utils import resolve_mentions, restore_mentions
+from discord_bot.context_cache import build_history_string
 
 logger = logging.getLogger("ChatHandler")
 FAILED_KEYS = {}
 
-async def build_history_string(channel_id: int) -> str:
-    history = await db_manager.get_messages(channel_id, limit=MAX_HISTORY)
-    if not history: return "No history."
-    return "\n".join([f"{m['author_name']}: {m['content']}" for m in history])
+def is_blacklisted(key):
+    if key in FAILED_KEYS and time.time() - FAILED_KEYS[key] < KEY_COOLDOWN:
+        return True
+    return False
 
 async def handle_chat(message):
     try:
-        # Store incoming message
+        # 1. Persistence
         await db_manager.store_message(
             message.id, message.channel.id, message.author.id, 
-            message.author.name, message.clean_content, message.created_at
+            message.author.display_name, message.clean_content, message.created_at
         )
         set_current_channel(message.channel)
         
         prompt = resolve_mentions(message)[len(PREFIX):].strip()
         if not prompt: return
 
-        # Prep context
+        # 2. Vision & History
         images = [Image(url=a.url) for a in message.attachments if a.content_type and "image" in a.content_type]
         history_str = await build_history_string(message.channel.id)
 
-        # Failover Strategy
+        # 3. Failover Execution
         keys = [
             (os.getenv("GROQ_API_KEY_1"), False, "Groq-1"),
             (os.getenv("GROQ_API_KEY_2"), False, "Groq-2"),
@@ -40,10 +42,9 @@ async def handle_chat(message):
 
         response = None
         for key, is_or, name in keys:
-            if not key or (key in FAILED_KEYS and time.time() - FAILED_KEYS[key] < KEY_COOLDOWN):
-                continue
+            if not key or is_blacklisted(key): continue
             
-            # Decide models: Vision override or standard primary -> secondary
+            # Sub-Failover: Primary -> 8B Fallback -> Vision
             models = [None] if not images else [GROQ_VISION_MODEL]
             if not is_or and not images: models.append(GROQ_MEMORY_MODEL)
 
@@ -54,23 +55,25 @@ async def handle_chat(message):
                     
                     if response and response.content:
                         text = response.content.lower()
-                        # Detect leaked API errors in text
                         if any(x in text for x in ["rate limit", "429", "quota", "<function"]):
-                            logger.warning(f"{name} leaked error text. Switching...")
+                            logger.warning(f"{name} soft failure. Switching...")
                             if "limit 100000" in text: FAILED_KEYS[key] = time.time()
                             continue
                         break
                 except Exception as e:
                     logger.error(f"Error on {name}: {e}")
                     continue
-            if response and response.content and "rate limit" not in response.content.lower():
-                break
+            if response and response.content and "rate limit" not in response.content.lower(): break
 
+        # 4. Reply
         if response and response.content:
             final = restore_mentions(response.content)
+            await asyncio.sleep(len(final) * 0.01 + 0.5)
             sent = await message.reply(f"**hero 🗿 :** {final}", mention_author=False)
-            # Store bot response
-            await db_manager.store_message(sent.id, sent.channel.id, sent.author.id, "hero 🗿", sent.clean_content, sent.created_at)
+            await db_manager.store_message(
+                sent.id, sent.channel.id, sent.author.id, 
+                "hero 🗿", sent.clean_content, sent.created_at
+            )
 
     except Exception as e:
         logger.exception("Critical fail in ChatHandler")
