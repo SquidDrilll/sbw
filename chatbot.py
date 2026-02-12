@@ -3,10 +3,15 @@ from datetime import datetime
 from agno.agent import Agent
 from agno.team import Team
 from agno.models.openai import OpenAILike
+from agno.media import Image # Added for Vision
 from exa_py import Exa 
 from database import db, msg_store
 from discord_utils import resolve_mentions, restore_mentions
 from agno.memory.manager import MemoryManager
+
+# --- NEW IMPORTS FROM YOUR FOLDERS ---
+from core.execution_context import set_current_channel
+from tools.bio_tools import BioTools
 
 # Import Firecrawl for website scraping
 try:
@@ -269,12 +274,16 @@ def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
         ]
     )
 
-    # Agent 2: The Historian (Local RAG)
+    # Agent 2: The Historian (Local RAG + BioTools)
+    # Now equipped with BioTools to see who it is talking to!
     lore_specialist = Agent(
         name="lore_specialist",
         model=memory_model,
+        tools=[BioTools()], # Added BioTools here
         instructions=[
-            "You are a historian. Use your knowledge to answer questions about past conversations.",
+            "You are a historian and user profiler.",
+            "Use your knowledge to answer questions about past conversations.",
+            "Use get_user_details to understand who the user is (roles, join date) if relevant.",
             "Refer to the conversation history provided in the context."
         ]
     )
@@ -286,6 +295,8 @@ def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
         # caused by the model attempting to call internal memory tools that aren't exposed.
         memory_manager=MemoryManager(model=memory_model, db=db),
         members=[researcher, lore_specialist],
+        # Add BioTools to the team leader as well so it can check user details directly
+        tools=[BioTools()],
         instructions=persona.format(chat_history=history_str, time=datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")),
         # FIXED: Set to False to prevent massive token usage (413 errors)
         update_memory_on_run=False,
@@ -296,24 +307,34 @@ def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
 async def handle_chat(message):
     try:
         await msg_store.store(message)
+        
+        # 1. SET CONTEXT FOR TOOLS (Critical for BioTools)
+        set_current_channel(message.channel)
+        
         prefix = os.getenv("PREFIX", ".")
         prompt = resolve_mentions(message)[len(prefix):].strip()
         if not prompt: return
 
-        # 1. FETCH & FORMAT LORE (Context Injection)
-        # Using env var MAX_HISTORY or defaulting to 12
+        # 2. IMAGE HANDLING (Vision)
+        images = []
+        if message.attachments:
+            for attachment in message.attachments:
+                if attachment.content_type and attachment.content_type.startswith('image/'):
+                    images.append(Image(url=attachment.url))
+                    print(f"👁️ Found image: {attachment.url}")
+
+        # 3. FETCH & FORMAT LORE
         max_hist = int(os.getenv("MAX_HISTORY", "12"))
         raw_history = await msg_store.get_history(message.channel.id, limit=max_hist)
         
         history_str = ""
         if raw_history:
             for msg in raw_history:
-                # Fixed: handling both dict and object types
                 role = "hero 🗿" if (msg.get('role') if isinstance(msg, dict) else msg.role) == "assistant" else "User"
                 content = msg.get('content') if isinstance(msg, dict) else msg.content
                 history_str += f"{role}: {content}\n"
 
-        # 2. THE CASCADING FAILOVER (The Junkie-Killer)
+        # 4. FAILOVER LOGIC
         keys_to_try = [
             (os.getenv("GROQ_API_KEY_1"), False),
             (os.getenv("GROQ_API_KEY_2"), False),
@@ -326,11 +347,16 @@ async def handle_chat(message):
             if not key: continue
             try:
                 team = get_hero_team(str(message.author.id), key, history_str, is_openrouter=is_or)
-                response = await team.arun(prompt, user_id=str(message.author.id))
+                
+                # RUN TEAM WITH IMAGES
+                response = await team.arun(
+                    prompt, 
+                    user_id=str(message.author.id),
+                    images=images if images else None
+                )
                 if response: break 
             except Exception as e:
                 err = str(e).lower()
-                # Catch specific tool errors or rate limits
                 if any(x in err for x in ["429", "rate limit", "400", "tool_use", "validation failed", "413"]):
                     print(f"⚠️ Key limited/failed ({err}). Switching...")
                     continue
@@ -340,10 +366,8 @@ async def handle_chat(message):
 
         if response:
             final = restore_mentions(response.content).strip()
-            # Adaptive style: lowercase if you do
             if prompt.islower(): final = final.lower()
             
-            # Artificial typing delay
             await asyncio.sleep(len(final) * 0.02 + 0.5)
             sent = await message.reply(f"**hero 🗿 :** {final}", mention_author=False)
             await msg_store.store(sent)
