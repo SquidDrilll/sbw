@@ -56,7 +56,7 @@ class BioTools(Toolkit):
             try:
                 user = await self.bot.fetch_user(u_id)
             except discord.NotFound:
-                return f"User {user_id} not found."
+                return f"Error: User {user_id} not found."
 
             details = [
                 f"User: {user.name} (ID: {user.id})",
@@ -84,4 +84,5 @@ class BioTools(Toolkit):
             avatar_url = user.avatar.url if user.avatar else user.default_avatar.url
             return ToolResult(content=f"Avatar for {user.name}", images=[Image(url=avatar_url)])
         except Exception as e:
-            return ToolResult(content=f"Error: {e}")ssssssssss
+            # FIX: Removed the typo 'ssssssssss' here
+            return ToolResult(content=f"Error: {e}")
