@@ -27,14 +27,10 @@ exa_client = Exa(api_key=EXA_API_KEY) if EXA_API_KEY else None
 firecrawl_client = FirecrawlApp(api_key=FIRECRAWL_API_KEY) if FIRECRAWL_API_KEY and FirecrawlApp else None
 
 def web_search(query: str) -> str:
-    """
-    Search the web for real-time information.
-    Args:
-        query (str): The search query.
-    """
+    """Search Google for query."""
     if not exa_client: return "Error: Exa Client not initialized."
     try:
-        # STRICT CALL: No autoprompt, no extra args. Just search.
+        # Strict call: No autoprompt, text=True
         response = exa_client.search_and_contents(query, num_results=EXA_NUM_RESULTS, text=True)
         return str(response)
     except Exception as e:
@@ -42,11 +38,7 @@ def web_search(query: str) -> str:
         return "Error: Web search failed."
 
 def scrape_website(url: str) -> str:
-    """
-    Scrape a website to read its content.
-    Args:
-        url (str): The URL to scrape.
-    """
+    """Read website content."""
     if not firecrawl_client: return "Error: Firecrawl Client not initialized."
     try:
         result = firecrawl_client.scrape_url(url, params={'formats': ['markdown']})
@@ -97,7 +89,9 @@ def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_o
         "memory_manager": MemoryManager(model=memory_model),
         "tools": tools,
         "instructions": f"{persona}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%Y-%m-%d %H:%M:%S %Z')}\n\nContext:\n{history_str}",
-        "markdown": True
+        "markdown": True,
+        # STABILITY FIX: Lower temperature prevents JSON syntax errors in tool calls
+        "temperature": 0.5 
     }
 
     if storage:
