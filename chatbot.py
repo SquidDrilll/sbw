@@ -96,10 +96,10 @@ persona = f"""You are Hero Companion, and you were developed by "Jeffery Epstein
             Delegation Hierarchy
             IMPORTANT: You may delegate tasks to multiple agents or the same agent in parallel for complex tasks and also to save time. Use the following internal delegation order (pick the most-appropriate agent first; fallback to next if needed):
             
-            Deep research / real-time web data / complex analysis → delegate to pplx-agent. Do not use this for code execution.
+            Deep research / real-time web data / complex analysis → delegate to research_agent. Do not use this for code execution.
             Short code execution / quick runs / math → delegate to groq-compound (fast short-run execution).
             Complex code / sandboxed execution / file ops / long-running computation → delegate to code-agent.
-            User insights / preferences / history / who-said-what / personality questions → delegate to context-qna-agent. This agent has access to persistent user memory and can answer questions about specific users.
+            User insights / preferences / history / who-said-what / personality questions → delegate to lore_specialist.
             MCP / platform-specific integrations → delegate to mcp_agent if present.
             To scrape websites, delegate tasks to code-agent.
             
@@ -174,7 +174,10 @@ persona = f"""You are Hero Companion, and you were developed by "Jeffery Epstein
 
 def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
     # Select Brain
-    model_id = "meta-llama/llama-3.3-70b-instruct" if is_openrouter else "llama-3.3-70b-versatile"
+    default_model = "llama-3.3-70b-versatile"
+    env_model = os.getenv("GROQ_MODEL", default_model)
+    
+    model_id = "meta-llama/llama-3.3-70b-instruct" if is_openrouter else env_model
     base_url = "https://openrouter.ai/api/v1" if is_openrouter else "https://api.groq.com/openai/v1"
     
     chat_model = OpenAILike(id=model_id, base_url=base_url, api_key=api_key)
@@ -182,32 +185,38 @@ def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
     # Muscle (8B) - Used for background agents to save 70B tokens
     memory_model = OpenAILike(id="llama-3.1-8b-instant", base_url="https://api.groq.com/openai/v1", api_key=api_key)
 
+    # Agent 1: The Specialized Web/Reddit Researcher
+    researcher = Agent(
+        name="researcher",
+        model=memory_model,
+        tools=[ExaTools()],
+        instructions=[
+            "Search the web for real-time facts.",
+            "To search Reddit specifically, use 'site:reddit.com' in your query.",
+            "Be concise. Prioritize threads with high engagement."
+        ]
+    )
+
+    # Agent 2: The Historian (Local RAG)
+    lore_specialist = Agent(
+        name="lore_specialist",
+        model=memory_model,
+        instructions=[
+            "You are a historian. Use your knowledge to answer questions about past conversations.",
+            "Refer to the conversation history provided in the context."
+        ]
+    )
+
     return Team(
         model=chat_model,
         db=db,
+        # CRITICAL FIX: enable_user_memories=False prevents 'tool validation failed' errors
+        # caused by the model attempting to call internal memory tools that aren't exposed.
         memory_manager=MemoryManager(model=memory_model, db=db),
-        members=[
-            # Agent 1: The Specialized Web/Reddit Researcher
-            Agent(
-                name="researcher",
-                model=memory_model,
-                tools=[ExaTools()],
-                instructions=[
-                    "Search the web for real-time facts.",
-                    "To search Reddit specifically, use 'site:reddit.com' in your query.",
-                    "Be concise. Prioritize threads with high engagement."
-                ]
-            ),
-            # Agent 2: The Historian (Local RAG)
-            Agent(
-                name="lore_specialist",
-                model=memory_model,
-                instructions="Query the PostgreSQL database for past user details, exam dates (JEE/GUJCET), and projects."
-            )
-        ],
-        instructions=PERSONA.format(chat_history=history_str, time=datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")),
+        members=[researcher, lore_specialist],
+        instructions=persona.format(chat_history=history_str, time=datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")),
         update_memory_on_run=True,
-        enable_user_memories=True,
+        enable_user_memories=False, # DISABLED to fix 400 tool_use_failed error
         markdown=True
     )
 
@@ -219,7 +228,10 @@ async def handle_chat(message):
         if not prompt: return
 
         # 1. FETCH & FORMAT LORE (Context Injection)
-        raw_history = await msg_store.get_history(message.channel.id, limit=12)
+        # Using env var MAX_HISTORY or defaulting to 12
+        max_hist = int(os.getenv("MAX_HISTORY", "12"))
+        raw_history = await msg_store.get_history(message.channel.id, limit=max_hist)
+        
         history_str = ""
         if raw_history:
             for msg in raw_history:
@@ -245,10 +257,13 @@ async def handle_chat(message):
                 if response: break 
             except Exception as e:
                 err = str(e).lower()
-                if any(x in err for x in ["429", "rate limit", "400", "tool_use"]):
-                    print(f"⚠️ Key limited/failed. Switching...")
+                # Catch specific tool errors or rate limits
+                if any(x in err for x in ["429", "rate limit", "400", "tool_use", "validation failed"]):
+                    print(f"⚠️ Key limited/failed ({err}). Switching...")
                     continue
-                else: raise e
+                else: 
+                    print(f"❌ Unexpected Error: {e}")
+                    raise e
 
         if response:
             final = restore_mentions(response.content).strip()
