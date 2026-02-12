@@ -19,18 +19,17 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
     try:
         set_current_channel(message)
         
-        # Simulate 'Thinking' - Trigger typing indicator
+        # Human-like 'Thinking' status
         async with message.channel.typing():
             prompt = resolve_mentions(message)
-            # Remove prefix if present
             if prompt.startswith(PREFIX):
                 prompt = prompt[len(PREFIX):].strip()
 
-            # 1. Fetch Local Context
+            if not prompt: return
+
+            # 1. Build context from recent logs
             history_str = await build_history_string(message.channel.id, bot.user.id)
 
-            # 2. Add 'Inner Monologue' to instructions to force memory usage
-            # If the prompt mentions a name, we nudge the agent to recall them.
             images = [Image(url=a.url) for a in message.attachments if a.content_type and "image" in a.content_type]
 
             keys = [
@@ -43,7 +42,11 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
             for key, is_or, name in keys:
                 if not key or is_blacklisted(key): continue
                 
-                m_id = GROQ_VISION_MODEL if images else (model_id if not is_or else None)
+                # FIX: Explicitly determine model IDs to avoid undefined variable errors
+                if images:
+                    m_id = GROQ_VISION_MODEL
+                else:
+                    m_id = OPENROUTER_MODEL if is_or else GROQ_MODEL
 
                 try:
                     agent = create_hero_agent(
@@ -53,12 +56,13 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
                         bio_tools=bio_tools
                     )
                     
-                    # Run the agent
                     response = await agent.arun(prompt, user_id=str(message.author.id), images=images if images else None)
                     
                     if response and response.content:
                         text = response.content.lower()
-                        if any(x in text for x in ["rate limit", "429", "quota"]):
+                        # Handle specific API rate limit strings
+                        if any(x in text for x in ["rate limit", "429", "quota exceeded"]):
+                            logger.warning(f"Key {name} rate limited.")
                             FAILED_KEYS[key] = time.time()
                             continue
                         break
@@ -67,14 +71,14 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
                     continue
             
             if response and response.content:
-                # 3. Final Humanization
                 final = restore_mentions(response.content)
                 
-                # Small delay to make 'typing' feel real
-                await asyncio.sleep(len(final) * 0.01) 
+                # Human typing simulation delay
+                await asyncio.sleep(min(len(final) * 0.02, 2.0)) 
                 
                 sent = await message.reply(final, mention_author=False)
                 
+                # Save Hero's own thoughts to memory
                 await db_manager.store_message(
                     sent.id, sent.channel.id, sent.author.id, 
                     "Hero", sent.content, sent.created_at
