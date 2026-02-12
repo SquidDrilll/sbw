@@ -30,13 +30,25 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     """Global message handler."""
-    # 1. Ignore messages sent by the bot itself
-    if message.author.id == bot.user.id:
-        return
-
-    # 2. Check for prefix (e.g., ".")
+    # Logic:
+    # 1. Self-Bot Mode: We usually want to ignore ourselves to prevent loops.
+    # 2. BUT: If the owner types a command explicitly (e.g. ".help"), we might want to run it.
+    # 3. SAFETY: We must ensure we don't reply to our OWN AI RESPONSES.
+    
+    # Check if message starts with prefix
     if message.content.startswith(PREFIX):
-        # Pass control to the specialized chat handler
+        # Case A: Message is from the account owner (YOU)
+        if message.author.id == bot.user.id:
+            # Prevent infinite loops: Don't reply if it looks like an AI response (e.g. bold name prefix)
+            # Adjust this check if your bot output format changes
+            if message.content.startswith(f"**hero 🗿 :**"): 
+                return
+            
+            logger.info(f"👑 Owner command detected: {message.content}")
+            await handle_chat(message)
+            return
+
+        # Case B: Message is from another user
         await handle_chat(message)
 
 if __name__ == "__main__":
