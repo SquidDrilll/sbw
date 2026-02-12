@@ -45,11 +45,13 @@ async def on_message(message):
                 return
             
             logger.info(f"👑 Owner command detected: {message.content}")
-            await handle_chat(message)
+            # Pass bot.user.id to identify the bot in history logic
+            await handle_chat(message, bot.user.id)
             return
 
         # Case B: Message is from another user
-        await handle_chat(message)
+        # Pass bot.user.id to identify the bot in history logic
+        await handle_chat(message, bot.user.id)
 
 if __name__ == "__main__":
     if not TOKEN:
