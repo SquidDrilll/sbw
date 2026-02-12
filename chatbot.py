@@ -10,13 +10,11 @@ from discord_utils import resolve_mentions, restore_mentions
 from agno.memory.manager import MemoryManager
 
 # --- IMPORTS FROM YOUR FOLDERS ---
-# NOTE: Ensure you have created 'core/execution_context.py' and 'tools/bio_tools.py'
 try:
     from core.execution_context import set_current_channel
     from tools.bio_tools import BioTools
 except ImportError as e:
     print(f"❌ Import Error: {e}")
-    # Dummy fallbacks to prevent immediate crash if files missing
     def set_current_channel(c): pass
     BioTools = None
 
@@ -27,9 +25,8 @@ except ImportError:
     FirecrawlApp = None
 
 # --- GLOBAL STATE ---
-# Stores failed keys to prevent retrying them: { "key_value": timestamp_of_failure }
 FAILED_KEYS = {}
-KEY_COOLDOWN = 3600  # Ignore a dead key for 1 hour
+KEY_COOLDOWN = 3600 
 
 def is_key_blacklisted(key):
     if not key: return True
@@ -37,12 +34,13 @@ def is_key_blacklisted(key):
         if time.time() - FAILED_KEYS[key] < KEY_COOLDOWN:
             return True
         else:
-            del FAILED_KEYS[key] # Expire cooldown
+            del FAILED_KEYS[key]
     return False
 
 def blacklist_key(key):
     FAILED_KEYS[key] = time.time()
 
+# --- PERSONA ---
 # --- PERSONA ---
 persona = f"""You are Hero Companion, and you were developed by "Jeffery Epstein." He is an AI enthusiast. You interact with users through text messages via Discord and have access to a wide range of tools.
 
@@ -214,8 +212,14 @@ Tools
 """
 
 # --- TOOLS ---
-def scrape_website(url: str) -> str:
-    """Use this to scrape the full content of a specific URL."""
+# CRITICAL FIX: Added **kwargs to absorb hallucinated arguments like 'entity'
+def scrape_website(url: str, **kwargs) -> str:
+    """
+    Use this to scrape the full content of a specific URL.
+    
+    Args:
+        url (str): The valid URL to scrape.
+    """
     api_key = os.getenv("FIRECRAWL_API_KEY")
     if not api_key: return "Error: FIRECRAWL_API_KEY not configured."
     if FirecrawlApp is None: return "Error: firecrawl-py not installed."
@@ -227,8 +231,14 @@ def scrape_website(url: str) -> str:
     except Exception as e:
         return f"Scraping failed: {e}"
 
-def web_search(query: str) -> str:
-    """Search the web for real-time information."""
+# CRITICAL FIX: Added **kwargs to absorb hallucinated arguments like 'entity'
+def web_search(query: str, **kwargs) -> str:
+    """
+    Search the web for real-time information.
+    
+    Args:
+        query (str): The search string. Do NOT pass 'entity' or any other arguments.
+    """
     api_key = os.getenv("EXA_API_KEY")
     if not api_key: return "Error: EXA_API_KEY not configured."
     try:
@@ -242,9 +252,6 @@ def web_search(query: str) -> str:
 
 # --- AGENT FACTORY ---
 def get_hero_agent(user_id, api_key, history_str, is_openrouter=False, specific_model=None):
-    """
-    Creates a Single Super-Agent (No Team/Delegation).
-    """
     if is_openrouter:
         base_url = "https://openrouter.ai/api/v1"
         chat_model_id = "meta-llama/llama-3.3-70b-instruct"
@@ -266,15 +273,12 @@ def get_hero_agent(user_id, api_key, history_str, is_openrouter=False, specific_
     if BioTools:
         tools_list.append(BioTools())
 
-    # Single Agent with ALL capabilities
     return Agent(
         model=chat_model,
-        # REMOVED db=db to prevent async crash
         memory_manager=MemoryManager(model=memory_model), 
         tools=tools_list, 
         instructions=persona + f"\n\nCurrent Context:\n{history_str}\nTime: {datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')}",
         markdown=True
-        # CLEANED: Removed all deprecated params causing crashes
     )
 
 async def handle_chat(message):
@@ -323,11 +327,10 @@ async def handle_chat(message):
                 print(f"⏭️ Skipping blacklisted key: {key_name}")
                 continue
             
-            # Models to try on this key
             models = [None] # None = Default
             if not is_or: models.append("llama-3.1-8b-instant")
             
-            # VISION OVERRIDE: If images exist, FORCE a vision-capable model
+            # VISION OVERRIDE
             if has_images and not is_or:
                 models = ["llama-3.2-90b-vision-preview"]
             
@@ -355,26 +358,21 @@ async def handle_chat(message):
                     if response and response.content:
                         content_lower = response.content.lower()
                         
-                        # CRITICAL FIX: Check for API Error Text leaked into response
-                        # Groq often returns the rate limit error as a plain string "Rate limit reached..." 
-                        # instead of raising an exception. We MUST catch this here.
+                        # API Error Text Check
                         if "rate limit" in content_lower or "429" in content_lower or "quota" in content_lower:
                             print(f"⚠️ {key_name} leaked error text. Treating as failure.")
-                            
-                            # If it's a daily limit, blacklist the key
                             if "tokens per day" in content_lower or "limit 100000" in content_lower:
                                 print(f"⛔ Daily Limit hit on {key_name}. Blacklisting for 1 hour.")
                                 blacklist_key(key)
                                 key_is_dead = True
                                 break 
-                            
-                            continue # Try next model
+                            continue 
                         
+                        # Tool Error Check
                         if "failed to call a function" in content_lower:
                             print(f"⚠️ Tool error on {key_name}. Retrying...")
                             continue
 
-                        # Success!
                         break 
                     else:
                         print(f"⚠️ Empty response from {key_name}.")
@@ -382,17 +380,14 @@ async def handle_chat(message):
                 except Exception as e:
                     err = str(e).lower()
                     
-                    # CATCH CONFIG ERRORS (Fatal)
                     if "unexpected keyword argument" in err:
                          print(f"❌ Config Error on {key_name}: {e}")
                          break 
                     
-                    # CATCH MODEL ERRORS (Vision mismatch)
                     if "does not support" in err and "image" in err:
                          print(f"⚠️ Model {current_model} cannot see images. Trying next...")
                          continue
 
-                    # CATCH RATE LIMITS
                     if "429" in err or "rate limit" in err:
                         if "per day" in err or "quota" in err:
                             print(f"⛔ Daily Limit exception on {key_name}. Blacklisting.")
@@ -402,13 +397,18 @@ async def handle_chat(message):
                         else:
                             print(f"⚠️ Rate Limit on {key_name}. Switching model...")
                             continue
+                    
+                    # CATCH VALIDATION ERRORS (The Pydantic Issue)
+                    if "validation error" in err:
+                        print(f"⚠️ Model Hallucinated Arguments on {key_name}. Retrying...")
+                        continue
+
                     else:
                         print(f"❌ Error on {key_name}: {e}")
                         continue
 
             if key_is_dead: continue 
             if response and response.content:
-                # Double check content for error strings again before breaking
                 content_lower = response.content.lower()
                 if "rate limit" not in content_lower and "429" not in content_lower:
                     break 
