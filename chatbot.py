@@ -3,10 +3,16 @@ from datetime import datetime
 from agno.agent import Agent
 from agno.team import Team
 from agno.models.openai import OpenAILike
-from agno.tools.exa import ExaTools
+from exa_py import Exa 
 from database import db, msg_store
 from discord_utils import resolve_mentions, restore_mentions
 from agno.memory.manager import MemoryManager
+
+# Import Firecrawl for website scraping
+try:
+    from firecrawl import FirecrawlApp
+except ImportError:
+    FirecrawlApp = None
 
 # ENHANCED PERSONA: Technical, witty, and personalized
 persona = f"""You are Hero Companion, and you were developed by "Jeffery Epstein." He is an AI enthusiast. You interact with users through text messages via Discord and have access to a wide range of tools.
@@ -172,6 +178,70 @@ persona = f"""You are Hero Companion, and you were developed by "Jeffery Epstein
             Even when calling tools, you should never break character when speaking to the user. Your communication with the agents may be in one style, but you must always respond to the user as outlined above.
             """
 
+# --- Custom Tool Definitions ---
+
+def scrape_website(url: str) -> str:
+    """
+    Use this to scrape the full content of a specific URL. 
+    Use this when a search result looks promising but you need the full text.
+    
+    Args:
+        url: The URL to scrape (e.g., "https://example.com/article").
+        
+    Returns:
+        The text content of the website.
+    """
+    api_key = os.getenv("FIRECRAWL_API_KEY")
+    if not api_key:
+        return "Error: FIRECRAWL_API_KEY not configured."
+    if FirecrawlApp is None:
+        return "Error: firecrawl-py not installed."
+        
+    try:
+        app = FirecrawlApp(api_key=api_key)
+        # Scrape formats: markdown is token-efficient
+        result = app.scrape_url(url, params={'formats': ['markdown']})
+        
+        # We limit the return size to avoid overflowing the 8B model's context
+        content = result.get('markdown', 'No content found.')
+        return content[:15000] 
+    except Exception as e:
+        return f"Scraping failed: {e}"
+
+def web_search(query: str) -> str:
+    """
+    Search the web for real-time information, news, or facts.
+    Use this when you need current information that isn't in your training data.
+    
+    Args:
+        query: The search query string (e.g., "latest tech news", "who won the game").
+    
+    Returns:
+        A string containing search results.
+    """
+    api_key = os.getenv("EXA_API_KEY")
+    if not api_key:
+        return "Error: EXA_API_KEY not configured."
+        
+    try:
+        # We initialize Exa here to keep the tool self-contained and stateless
+        exa = Exa(api_key=api_key)
+        
+        # We enforce specific parameters here so the LLM doesn't have to guess them.
+        # This prevents 400 errors from 'null' categories or invalid types.
+        response = exa.search_and_contents(
+            query,
+            num_results=3,       # STRICT LIMIT: Keep token usage low (prevents 413 errors)
+            use_autoprompt=True, # Let Exa optimize the query
+            text=True,
+            highlights=True
+        )
+        return str(response)
+    except Exception as e:
+        return f"Search failed: {e}"
+
+# -------------------------------
+
 def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
     # Select Brain
     default_model = "llama-3.3-70b-versatile"
@@ -189,15 +259,13 @@ def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
     researcher = Agent(
         name="researcher",
         model=memory_model,
-        # FIXED: Limit results to 3 to prevent "48k token" errors on Groq Free Tier
-        tools=[ExaTools(num_results=3)],
+        # FIXED: Added scrape_website to tools
+        tools=[web_search, scrape_website],
         instructions=[
-            "Search the web for real-time facts.",
-            "To search Reddit specifically, use 'site:reddit.com' in your query.",
+            "Search the web for real-time facts using the web_search tool.",
+            "If you find a specific URL that looks promising and you need to read the full content, use the scrape_website tool.",
+            "If searching Reddit, include 'site:reddit.com' in your query string.",
             "Be concise. Prioritize threads with high engagement.",
-            # CRITICAL FIX: Explicitly list valid categories to prevent invalid tool calls
-            "When using the search tool, the 'category' argument MUST be one of: 'company', 'research paper', 'news', 'pdf', 'tweet', 'personal site', 'financial report', 'people'.",
-            "Do NOT use 'linkedin profile', 'twitter' (use 'tweet'), or any other category not listed above.",
         ]
     )
 
