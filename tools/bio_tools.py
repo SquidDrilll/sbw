@@ -26,7 +26,11 @@ class BioTools(Toolkit):
         
         try:
             # Fix: Ensure user_id is an integer for discord.py
-            u_id = int(user_id)
+            # This fixes the "expected number, but got string" error
+            try:
+                u_id = int(user_id)
+            except ValueError:
+                return f"Error: '{user_id}' is not a valid numerical ID."
             
             try:
                 user = await self.bot.fetch_user(u_id)
@@ -57,8 +61,6 @@ class BioTools(Toolkit):
 
             return "\n".join(details)
         
-        except ValueError:
-            return f"Error: '{user_id}' is not a valid numerical ID."
         except Exception as e:
             logger.error(f"Critical error in get_user_details: {e}", exc_info=True)
             return "Error: Internal lookup failure."
