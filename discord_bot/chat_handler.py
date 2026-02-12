@@ -17,14 +17,15 @@ def is_blacklisted(key):
 
 async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
     try:
-        set_current_channel(message) # Store full message for guild/client access
+        set_current_channel(message)
         
         prompt = resolve_mentions(message)[len(PREFIX):].strip()
         if not prompt: return
 
-        # Fetch history FIRST (Fixes echo bug)
+        # 1. Fetch History
         history_str = await build_history_string(message.channel.id, bot.user.id)
 
+        # 2. Store User Message
         await db_manager.store_message(
             message.id, message.channel.id, message.author.id, 
             message.author.display_name, message.clean_content, message.created_at
@@ -47,13 +48,13 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
 
             for m_id in models:
                 try:
-                    # Pass existing bio_tools instance
                     agent = create_hero_agent(
                         key, history_str, 
                         model_id=m_id, 
                         is_openrouter=is_or, 
                         bio_tools=bio_tools
                     )
+                    # Passing user_id lets the database recall memories about "Forbit"
                     response = await agent.arun(prompt, user_id=str(message.author.id), images=images if images else None)
                     
                     if response and response.content:
@@ -68,10 +69,19 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
                     continue
             if response and response.content: break
 
+        # 3. Reply naturally (Human Style)
         if response and response.content:
             final = restore_mentions(response.content)
-            sent = await message.reply(f"**hero 🗿 :** {final}", mention_author=False)
-            await db_manager.store_message(sent.id, sent.channel.id, sent.author.id, "hero 🗿", sent.clean_content, sent.created_at)
+            
+            # CHANGE: Removed "f'**hero 🗿 :** {final}'" -> Just "{final}"
+            # This makes it look like a real person typing
+            sent = await message.reply(final, mention_author=False)
+            
+            # Store it with a cleaner name in the DB
+            await db_manager.store_message(
+                sent.id, sent.channel.id, sent.author.id, 
+                "Hero", sent.clean_content, sent.created_at
+            )
 
     except Exception as e:
         logger.exception("Critical fail in ChatHandler")
