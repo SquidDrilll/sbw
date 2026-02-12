@@ -4,11 +4,17 @@ from agno.agent import Agent
 from agno.models.openai import OpenAILike
 from agno.memory.manager import MemoryManager
 from agno.tools import Toolkit
-# Import persistent storage
-from agno.storage.agent.postgres import PgAgentStorage
 from exa_py import Exa
 from core.config import *
 from typing import Optional
+
+# --- SAFE IMPORT FOR STORAGE ---
+# This prevents the bot from crashing if 'agno.storage' is missing or updated.
+try:
+    from agno.storage.agent.postgres import PgAgentStorage
+except ImportError:
+    PgAgentStorage = None
+    print("⚠️ WARNING: agno.storage module not found. Persistent memory will be disabled.")
 
 # Import Firecrawl
 try:
@@ -44,7 +50,7 @@ def scrape_website(url: str, **kwargs) -> str:
 
 def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_openrouter: bool = False, bio_tools: Optional[Toolkit] = None):
     """
-    Creates the production-grade Hero Agent with Persistent Memory.
+    Creates the production-grade Hero Agent with Failover Memory.
     """
     
     if is_openrouter:
@@ -67,25 +73,36 @@ def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_o
     if bio_tools:
         tools.append(bio_tools)
 
-    # --- MEMORY STORAGE SETUP ---
-    # Convert asyncpg URL (used by bot DB) to standard postgres URL (used by SQLAlchemy/Agno)
-    db_url = POSTGRES_URL
-    if "postgresql+asyncpg" in db_url:
-        db_url = db_url.replace("postgresql+asyncpg", "postgresql")
-    
-    # Initialize persistent storage for the Agent's brain
-    storage = PgAgentStorage(table_name="hero_memories", db_url=db_url)
+    # --- STORAGE SETUP WITH FALLBACK ---
+    storage = None
+    if PgAgentStorage and POSTGRES_URL:
+        try:
+            # Convert asyncpg URL (used by bot DB) to standard postgres URL (used by SQLAlchemy/Agno)
+            db_url = POSTGRES_URL
+            if "postgresql+asyncpg" in db_url:
+                db_url = db_url.replace("postgresql+asyncpg", "postgresql")
+            
+            # Initialize persistent storage for the Agent's brain
+            storage = PgAgentStorage(table_name="hero_memories", db_url=db_url)
+        except Exception as e:
+            logger.error(f"Failed to init Postgres Storage: {e}")
+            storage = None
 
-    return Agent(
-        model=chat_model,
-        # 1. Attach Storage: This stops the "Memory Db not provided" warning
-        storage=storage,
-        # 2. Disable Built-in Chat History: We inject channel history manually via 'history_str'
-        #    so we don't want the agent confusing that with its internal long-term memory.
-        add_history_to_messages=False,
-        # 3. Enable Memory Manager: Uses the storage to save facts about the user
-        memory_manager=MemoryManager(model=memory_model),
-        tools=tools,
-        instructions=f"{persona}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%H:%M:%S')}\n\nContext:\n{history_str}",
-        markdown=True
-    )
+    # Define Agent arguments
+    agent_kwargs = {
+        "model": chat_model,
+        "add_history_to_messages": False, # Manual history injection
+        "memory_manager": MemoryManager(model=memory_model),
+        "tools": tools,
+        "instructions": f"{persona}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%H:%M:%S')}\n\nContext:\n{history_str}",
+        "markdown": True
+    }
+
+    # Only attach storage if it initialized correctly
+    if storage:
+        agent_kwargs["storage"] = storage
+    else:
+        # Fallback for debugging or if module is missing
+        pass 
+
+    return Agent(**agent_kwargs)
