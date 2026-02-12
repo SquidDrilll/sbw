@@ -189,11 +189,15 @@ def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
     researcher = Agent(
         name="researcher",
         model=memory_model,
-        tools=[ExaTools()],
+        # FIXED: Limit results to 3 to prevent "48k token" errors on Groq Free Tier
+        tools=[ExaTools(num_results=3)],
         instructions=[
             "Search the web for real-time facts.",
             "To search Reddit specifically, use 'site:reddit.com' in your query.",
-            "Be concise. Prioritize threads with high engagement."
+            "Be concise. Prioritize threads with high engagement.",
+            # CRITICAL FIX: Explicitly list valid categories to prevent invalid tool calls
+            "When using the search tool, the 'category' argument MUST be one of: 'company', 'research paper', 'news', 'pdf', 'tweet', 'personal site', 'financial report', 'people'.",
+            "Do NOT use 'linkedin profile', 'twitter' (use 'tweet'), or any other category not listed above.",
         ]
     )
 
@@ -215,7 +219,8 @@ def get_hero_team(user_id, api_key, history_str, is_openrouter=False):
         memory_manager=MemoryManager(model=memory_model, db=db),
         members=[researcher, lore_specialist],
         instructions=persona.format(chat_history=history_str, time=datetime.now(pytz.timezone('Asia/Kolkata')).strftime("%H:%M:%S")),
-        update_memory_on_run=True,
+        # FIXED: Set to False to prevent massive token usage (413 errors)
+        update_memory_on_run=False,
         enable_user_memories=False, # DISABLED to fix 400 tool_use_failed error
         markdown=True
     )
@@ -258,7 +263,7 @@ async def handle_chat(message):
             except Exception as e:
                 err = str(e).lower()
                 # Catch specific tool errors or rate limits
-                if any(x in err for x in ["429", "rate limit", "400", "tool_use", "validation failed"]):
+                if any(x in err for x in ["429", "rate limit", "400", "tool_use", "validation failed", "413"]):
                     print(f"⚠️ Key limited/failed ({err}). Switching...")
                     continue
                 else: 
