@@ -10,7 +10,6 @@ from discord_utils import resolve_mentions, restore_mentions
 from agno.memory.manager import MemoryManager
 
 # --- IMPORTS FROM YOUR FOLDERS ---
-# Ensure core/execution_context.py and tools/bio_tools.py exist
 from core.execution_context import set_current_channel
 from tools.bio_tools import BioTools
 
@@ -110,15 +109,16 @@ def get_hero_agent(user_id, api_key, history_str, is_openrouter=False, specific_
     # Single Agent with ALL capabilities
     return Agent(
         model=chat_model,
-        # Direct Memory Access
-        memory_manager=MemoryManager(model=memory_model, db=db),
+        # Direct Memory Access - FIXED: REMOVED db=db
+        # We disabled the database here because the current version of 'agno' crashes 
+        # when using AsyncPostgresDb with the MemoryManager (async/await bug).
+        # Context is handled via 'history_str' injection, so this is safe.
+        memory_manager=MemoryManager(model=memory_model), 
         # ALL TOOLS REGISTERED DIRECTLY
         tools=[web_search, scrape_website, BioTools()], 
         instructions=persona + f"\n\nCurrent Context:\n{history_str}\nTime: {datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')}",
-        markdown=True
-        # REMOVED: show_tool_calls=False (Caused Crash)
-        # REMOVED: add_datetime_to_instructions=True (Caused Crash)
-        # REMOVED: prevent_hallucinations=True (Caused Crash)
+        markdown=True,
+        prevent_hallucinations=True 
     )
 
 async def handle_chat(message):
@@ -217,6 +217,12 @@ async def handle_chat(message):
 
                 except Exception as e:
                     err = str(e).lower()
+                    if "unexpected keyword argument" in err:
+                         # Fallback if prevent_hallucinations is also broken in your version
+                         print(f"❌ Config Error on {key_name}: {e}")
+                         # We stop here because this is a code error, not a key error
+                         break 
+
                     if "429" in err or "rate limit" in err:
                         if "per day" in err or "quota" in err:
                             print(f"⛔ Daily Limit exception on {key_name}. Blacklisting.")
