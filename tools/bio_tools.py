@@ -84,4 +84,4 @@ class BioTools(Toolkit):
             avatar_url = user.avatar.url if user.avatar else user.default_avatar.url
             return ToolResult(content=f"Avatar for {user.name}", images=[Image(url=avatar_url)])
         except Exception as e:
-            return ToolResult(content=f"Error: {e}")
+            return ToolResult(content=f"Error: {e}")ssssssssss
