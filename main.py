@@ -1,57 +1,50 @@
-import os, discord, asyncio
+import os, discord, asyncio, logging
 from discord.ext import commands
-from dotenv import load_dotenv
-from database import msg_store
-from chatbot import handle_chat
 
-# Load environment variables
-load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
-PREFIX = os.getenv("PREFIX", ".")
+# Import from the new modular structure
+from core.config import TOKEN, PREFIX
+from core.database import db_manager
+from discord_bot.chat_handler import handle_chat
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("Main")
 
 # Initialize Bot
 bot = commands.Bot(command_prefix=PREFIX, self_bot=True)
 
-async def deep_sync():
-    """Junkie-style background sync: Index history without AI tokens."""
-    await bot.wait_until_ready()
-    print("🗿 Starting deep lore sync...")
-    
-    if not bot.private_channels:
-        print("ℹ️ No private channels loaded immediately. Waiting for cache...")
-    
-    # Iterate through visible channels (Note: Self-bots see many channels)
-    # We limit strictly to private channels (DMs/Group DMs) to avoid spamming the DB
-    count = 0
-    for channel in bot.private_channels:
-        try:
-            async for msg in channel.history(limit=200):
-                await msg_store.store(msg)
-                count += 1
-                if count % 50 == 0:
-                    await asyncio.sleep(1) # Rate limit protection
-            await asyncio.sleep(0.05)
-        except Exception as e: 
-            continue
-            
-    print(f"✨ Deep sync complete. Indexed messages.")
-
 @bot.event
 async def on_ready():
-    print(f"✅ hero 🗿 online | Prefix: {PREFIX} | User: {bot.user}")
-    await msg_store.init()
-    bot.loop.create_task(deep_sync())
+    """Called when the bot connects to Discord."""
+    logger.info(f"✅ Logged in as: {bot.user}")
+    
+    # Initialize Database Connection Pool
+    await db_manager.init()
+    
+    # Optional: Print stats or perform startup tasks here
+    logger.info("🚀 Hero Companion is online and ready.")
 
 @bot.event
 async def on_message(message):
-    # CRITICAL: Prevent self-response loop
+    """Global message handler."""
+    # 1. Ignore messages sent by the bot itself
     if message.author.id == bot.user.id:
         return
-        
+
+    # 2. Check for prefix (e.g., ".")
     if message.content.startswith(PREFIX):
+        # Pass control to the specialized chat handler
         await handle_chat(message)
 
-if TOKEN:
-    bot.run(TOKEN)
-else:
-    print("❌ ERROR: No DISCORD_TOKEN found in environment variables.")
+if __name__ == "__main__":
+    if not TOKEN:
+        logger.critical("❌ ERROR: DISCORD_TOKEN is missing in environment variables.")
+        exit(1)
+    
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        logger.critical(f"❌ Fatal Error running bot: {e}")
