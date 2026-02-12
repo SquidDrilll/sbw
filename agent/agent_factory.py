@@ -91,7 +91,9 @@ def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_o
     # Define Agent arguments
     agent_kwargs = {
         "model": chat_model,
-        "add_history_to_messages": False, # Manual history injection
+        # FIX: 'add_history_to_messages' is deprecated. Use 'num_history_messages=0'
+        # to disable automatic history injection since we do it manually via 'instructions'.
+        "num_history_messages": 0, 
         "memory_manager": MemoryManager(model=memory_model),
         "tools": tools,
         "instructions": f"{persona}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%H:%M:%S')}\n\nContext:\n{history_str}",
