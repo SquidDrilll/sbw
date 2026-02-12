@@ -19,34 +19,32 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
     try:
         set_current_channel(message)
         
-        prompt = resolve_mentions(message)[len(PREFIX):].strip()
-        if not prompt: return
+        # Simulate 'Thinking' - Trigger typing indicator
+        async with message.channel.typing():
+            prompt = resolve_mentions(message)
+            # Remove prefix if present
+            if prompt.startswith(PREFIX):
+                prompt = prompt[len(PREFIX):].strip()
 
-        # 1. Fetch History
-        history_str = await build_history_string(message.channel.id, bot.user.id)
+            # 1. Fetch Local Context
+            history_str = await build_history_string(message.channel.id, bot.user.id)
 
-        # 2. Store User Message
-        await db_manager.store_message(
-            message.id, message.channel.id, message.author.id, 
-            message.author.display_name, message.clean_content, message.created_at
-        )
+            # 2. Add 'Inner Monologue' to instructions to force memory usage
+            # If the prompt mentions a name, we nudge the agent to recall them.
+            images = [Image(url=a.url) for a in message.attachments if a.content_type and "image" in a.content_type]
 
-        images = [Image(url=a.url) for a in message.attachments if a.content_type and "image" in a.content_type]
+            keys = [
+                (os.getenv("GROQ_API_KEY_1"), False, "Groq-1"),
+                (os.getenv("GROQ_API_KEY_2"), False, "Groq-2"),
+                (os.getenv("OPENROUTER_API_KEY"), True, "OpenRouter")
+            ]
 
-        keys = [
-            (os.getenv("GROQ_API_KEY_1"), False, "Groq-1"),
-            (os.getenv("GROQ_API_KEY_2"), False, "Groq-2"),
-            (os.getenv("OPENROUTER_API_KEY"), True, "OpenRouter")
-        ]
+            response = None
+            for key, is_or, name in keys:
+                if not key or is_blacklisted(key): continue
+                
+                m_id = GROQ_VISION_MODEL if images else (model_id if not is_or else None)
 
-        response = None
-        for key, is_or, name in keys:
-            if not key or is_blacklisted(key): continue
-            
-            models = [None] if not images else [GROQ_VISION_MODEL]
-            if not is_or and not images: models.append(GROQ_MEMORY_MODEL)
-
-            for m_id in models:
                 try:
                     agent = create_hero_agent(
                         key, history_str, 
@@ -54,34 +52,33 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
                         is_openrouter=is_or, 
                         bio_tools=bio_tools
                     )
-                    # Passing user_id lets the database recall memories about "Forbit"
+                    
+                    # Run the agent
                     response = await agent.arun(prompt, user_id=str(message.author.id), images=images if images else None)
                     
                     if response and response.content:
                         text = response.content.lower()
                         if any(x in text for x in ["rate limit", "429", "quota"]):
-                            logger.warning(f"{name} rate limited.")
                             FAILED_KEYS[key] = time.time()
                             continue
                         break
                 except Exception as e:
                     logger.error(f"Error on {name}: {e}")
                     continue
-            if response and response.content: break
-
-        # 3. Reply naturally (Human Style)
-        if response and response.content:
-            final = restore_mentions(response.content)
             
-            # CHANGE: Removed "f'**hero 🗿 :** {final}'" -> Just "{final}"
-            # This makes it look like a real person typing
-            sent = await message.reply(final, mention_author=False)
-            
-            # Store it with a cleaner name in the DB
-            await db_manager.store_message(
-                sent.id, sent.channel.id, sent.author.id, 
-                "Hero", sent.clean_content, sent.created_at
-            )
+            if response and response.content:
+                # 3. Final Humanization
+                final = restore_mentions(response.content)
+                
+                # Small delay to make 'typing' feel real
+                await asyncio.sleep(len(final) * 0.01) 
+                
+                sent = await message.reply(final, mention_author=False)
+                
+                await db_manager.store_message(
+                    sent.id, sent.channel.id, sent.author.id, 
+                    "Hero", sent.content, sent.created_at
+                )
 
     except Exception as e:
         logger.exception("Critical fail in ChatHandler")
