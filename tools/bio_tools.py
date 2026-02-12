@@ -1,7 +1,6 @@
 from agno.tools import Toolkit
 from agno.tools.function import ToolResult
 from agno.media import Image
-# Import from the core folder for channel context (guild check)
 from core.execution_context import get_current_channel
 import logging
 import discord
@@ -12,34 +11,30 @@ logger = logging.getLogger(__name__)
 class BioTools(Toolkit):
     def __init__(self, bot: discord.Client):
         super().__init__(name="bio_tools")
-        self.bot = bot # Dependency Injection: Store the bot instance
+        self.bot = bot  # Dependency Injection: Stable access to the bot
         self.register(self.get_user_details)
         self.register(self.get_user_avatar)
 
-    async def get_user_details(self, user_id: int) -> str:
+    async def get_user_details(self, user_id: Union[int, str]) -> str:
         """
-        Fetches details for a Discord user by their ID (username, roles, join date, etc.).
-        Use this when you need to know more about the person you are talking to.
+        Fetches details for a Discord user (username, roles, join date, etc.).
         
         Args:
-            user_id (int): The Discord user ID.
-            
-        Returns:
-            str: Formatted user details or error message.
+            user_id (Union[int, str]): The Discord user ID.
         """
-        # We still need context to know if we are in a guild for role checks
         channel = get_current_channel()
         
         try:
-            # Safe access using the injected bot instance
+            # Fix: Ensure user_id is an integer for discord.py
+            u_id = int(user_id)
+            
             try:
-                user = await self.bot.fetch_user(user_id)
+                user = await self.bot.fetch_user(u_id)
             except discord.NotFound:
-                return f"Error: User with ID {user_id} not found."
+                return f"Error: User {user_id} not found."
             except discord.HTTPException as e:
-                return f"Error: Discord API failure: {str(e)}"
+                return f"Error: Discord API failure: {e}"
 
-            # Build details
             details = [
                 f"User: {user.name} (ID: {user.id})",
                 f"Display Name: {user.display_name}",
@@ -47,45 +42,40 @@ class BioTools(Toolkit):
                 f"Bot: {user.bot}",
             ]
             
-            # If in a guild, try to get member details (roles, join date)
-            if channel and getattr(channel, 'guild', None):
+            # Context-aware guild details
+            if channel and hasattr(channel, 'guild') and channel.guild:
                 try:
-                    member = await channel.guild.fetch_member(user_id)
+                    member = await channel.guild.fetch_member(u_id)
                     details.append(f"Joined Server: {member.joined_at.strftime('%Y-%m-%d')}")
                     roles = [r.name for r in member.roles if r.name != "@everyone"]
                     if roles:
                         details.append(f"Roles: {', '.join(roles)}")
                     if member.nick:
                         details.append(f"Server Nickname: {member.nick}")
-                except discord.NotFound:
-                    # User isn't in this specific guild, which is fine
+                except (discord.NotFound, discord.Forbidden):
                     pass 
-                except Exception as e:
-                    logger.warning(f"Failed to fetch member details: {e}")
 
             return "\n".join(details)
         
+        except ValueError:
+            return f"Error: '{user_id}' is not a valid numerical ID."
         except Exception as e:
             logger.error(f"Critical error in get_user_details: {e}", exc_info=True)
-            return "Error: An unexpected internal error occurred while fetching user details."
+            return "Error: Internal lookup failure."
 
-    async def get_user_avatar(self, user_id: int) -> ToolResult:
+    async def get_user_avatar(self, user_id: Union[int, str]) -> ToolResult:
         """
-        Fetches the avatar of a Discord user to see what they look like.
-        
-        Args:
-            user_id (int): The Discord user ID.
+        Fetches the avatar of a Discord user.
         """
         try:
-            user = await self.bot.fetch_user(user_id)
+            u_id = int(user_id)
+            user = await self.bot.fetch_user(u_id)
             avatar_url = user.avatar.url if user.avatar else user.default_avatar.url
             
             return ToolResult(
                 content=f"Avatar for {user.name}",
                 images=[Image(url=avatar_url)]
             )
-        except discord.NotFound:
-            return ToolResult(content=f"Error: User {user_id} not found.")
         except Exception as e:
-            logger.error(f"Error getting avatar: {e}", exc_info=True)
-            return ToolResult(content="Error: Could not retrieve avatar.")
+            logger.error(f"Error getting avatar: {e}")
+            return ToolResult(content=f"Error: {e}")
