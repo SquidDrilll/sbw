@@ -115,7 +115,7 @@ def get_hero_agent(user_id, api_key, history_str, is_openrouter=False, specific_
         tools=[web_search, scrape_website, BioTools()], 
         instructions=persona + f"\n\nCurrent Context:\n{history_str}\nTime: {datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')}",
         markdown=True,
-        show_tool_calls=False,
+        # REMOVED: show_tool_calls=False (Caused Crash)
         # Disable internal delegation logic to prevent 400 errors
         add_datetime_to_instructions=True, 
         prevent_hallucinations=True
