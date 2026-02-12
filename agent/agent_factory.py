@@ -15,20 +15,18 @@ except ImportError:
 
 logger = logging.getLogger("AgentFactory")
 
-# --- CUSTOM TOOLS WITH ERROR PREVENTION ---
-
 def web_search(query: str, entity: str = None, **kwargs) -> str:
-    """Search the web for real-time information. Args: query (str)."""
+    """Search the web for real-time information."""
     if not EXA_API_KEY: return "Error: EXA_API_KEY missing."
     try:
         exa = Exa(api_key=EXA_API_KEY)
-        response = exa.search_and_contents(query, num_results=3, use_autoprompt=True, text=True)
+        response = exa.search_and_contents(query, num_results=EXA_NUM_RESULTS, use_autoprompt=True, text=True)
         return str(response)
     except Exception as e:
         return f"Search failed: {e}"
 
 def scrape_website(url: str, **kwargs) -> str:
-    """Scrape full content of a URL. Args: url (str)."""
+    """Scrape full content of a URL."""
     if not FIRECRAWL_API_KEY: return "Error: FIRECRAWL_API_KEY missing."
     if not FirecrawlApp: return "Error: firecrawl-py not installed."
     try:
@@ -38,11 +36,8 @@ def scrape_website(url: str, **kwargs) -> str:
     except Exception as e:
         return f"Scraping failed: {e}"
 
-# --- FACTORY ---
-
 def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_openrouter: bool = False):
-    """Creates the production-grade Hero Agent."""
-    
+    """Creates the production Hero Agent with failover model support."""
     if is_openrouter:
         base_url = "https://openrouter.ai/api/v1"
         chat_model_id = model_id or OPENROUTER_MODEL
@@ -55,13 +50,11 @@ def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_o
     chat_model = OpenAILike(id=chat_model_id, base_url=base_url, api_key=api_key)
     memory_model = OpenAILike(id=memory_model_id, base_url=base_url, api_key=api_key)
 
-    # Use persona from your instructions
-    persona = os.getenv("PERSONA_TEXT", "You are Hero Companion developed by Jeffery Epstein...")
-    
     return Agent(
         model=chat_model,
+        # Manual history injection is used instead of direct DB to avoid async crashes
         memory_manager=MemoryManager(model=memory_model),
         tools=[web_search, scrape_website, BioTools()],
-        instructions=f"{persona}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%H:%M:%S')}\n\nContext:\n{history_str}",
+        instructions=f"{PERSONA_TEXT}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%H:%M:%S')}\n\nContext:\n{history_str}",
         markdown=True
     )
