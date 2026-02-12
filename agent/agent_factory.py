@@ -27,10 +27,14 @@ exa_client = Exa(api_key=EXA_API_KEY) if EXA_API_KEY else None
 firecrawl_client = FirecrawlApp(api_key=FIRECRAWL_API_KEY) if FIRECRAWL_API_KEY and FirecrawlApp else None
 
 def web_search(query: str) -> str:
-    """Search Google for query."""
+    """
+    Search the web for real-time information.
+    Args:
+        query (str): The search query.
+    """
     if not exa_client: return "Error: Exa Client not initialized."
     try:
-        # Strict call: No autoprompt, text=True
+        # STRICT CALL: No autoprompt, no extra args. Just search.
         response = exa_client.search_and_contents(query, num_results=EXA_NUM_RESULTS, text=True)
         return str(response)
     except Exception as e:
@@ -38,7 +42,11 @@ def web_search(query: str) -> str:
         return "Error: Web search failed."
 
 def scrape_website(url: str) -> str:
-    """Read website content."""
+    """
+    Scrape a website to read its content.
+    Args:
+        url (str): The URL to scrape.
+    """
     if not firecrawl_client: return "Error: Firecrawl Client not initialized."
     try:
         result = firecrawl_client.scrape_url(url, params={'formats': ['markdown']})
@@ -61,8 +69,20 @@ def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_o
         chat_model_id = model_id or GROQ_MODEL
         memory_model_id = GROQ_MEMORY_MODEL
 
-    chat_model = OpenAILike(id=chat_model_id, base_url=base_url, api_key=api_key)
-    memory_model = OpenAILike(id=memory_model_id, base_url=base_url, api_key=api_key)
+    # FIX: Temperature is set HERE on the model, not the Agent
+    chat_model = OpenAILike(
+        id=chat_model_id, 
+        base_url=base_url, 
+        api_key=api_key,
+        temperature=0.5  # Stability fix for tool calling
+    )
+    
+    memory_model = OpenAILike(
+        id=memory_model_id, 
+        base_url=base_url, 
+        api_key=api_key,
+        temperature=0.1 # Low temp for factual memory
+    )
 
     # Use persona from config
     persona = PERSONA_TEXT
@@ -89,9 +109,8 @@ def create_hero_agent(api_key: str, history_str: str, model_id: str = None, is_o
         "memory_manager": MemoryManager(model=memory_model),
         "tools": tools,
         "instructions": f"{persona}\n\nTime: {datetime.now(pytz.timezone(TZ)).strftime('%Y-%m-%d %H:%M:%S %Z')}\n\nContext:\n{history_str}",
-        "markdown": True,
-        # STABILITY FIX: Lower temperature prevents JSON syntax errors in tool calls
-        "temperature": 0.5 
+        "markdown": True
+        # REMOVED: "temperature": 0.5 (Caused the crash)
     }
 
     if storage:
