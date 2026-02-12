@@ -348,6 +348,13 @@ async def handle_chat(message):
                     )
                     
                     if response and response.content: 
+                        # CRITICAL FIX: Check if the content itself is an API error message
+                        # Some libraries return the error text instead of raising an exception.
+                        lower_content = response.content.lower()
+                        if "rate limit" in lower_content or "429" in lower_content:
+                            print(f"⚠️ {key_name} ({current_model_name}) returned error in text. Switching...")
+                            continue # Treat as failure, try next model/key
+                            
                         key_success = True
                         break # Break model loop, success!
                     else:
@@ -378,4 +385,3 @@ async def handle_chat(message):
             
     except Exception as e:
         print(f"❌ Chat Error: {e}")
-        
