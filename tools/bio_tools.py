@@ -18,10 +18,17 @@ class BioTools(Toolkit):
     def _get_discord_client(self, channel=None) -> Optional[discord.Client]:
         """Helper to get the Discord client from the current channel context."""
         if channel:
-            # Try to get client from channel state (works for DMs and Guilds)
+            # 1. Try getting from guild (Public API approach, safer)
+            if hasattr(channel, 'guild') and channel.guild:
+                 # In some versions of discord.py, guild.me.client might work, 
+                 # but sticking to the _state method as fallback is reliable for self-bots.
+                 pass
+
+            # 2. Try to get client from channel state (Private API, works for DMs and Guilds)
             if hasattr(channel, '_state') and hasattr(channel._state, '_get_client'):
                 return channel._state._get_client()
-            # Try getting from guild
+                
+            # 3. Fallback: Try getting from guild state
             guild = getattr(channel, 'guild', None)
             if guild and hasattr(guild, '_state') and hasattr(guild._state, '_get_client'):
                 return guild._state._get_client()
