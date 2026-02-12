@@ -10,6 +10,7 @@ from discord_utils import resolve_mentions, restore_mentions
 from agno.memory.manager import MemoryManager
 
 # --- IMPORTS FROM YOUR FOLDERS ---
+# Ensure core/execution_context.py and tools/bio_tools.py exist
 from core.execution_context import set_current_channel
 from tools.bio_tools import BioTools
 
@@ -114,10 +115,10 @@ def get_hero_agent(user_id, api_key, history_str, is_openrouter=False, specific_
         # ALL TOOLS REGISTERED DIRECTLY
         tools=[web_search, scrape_website, BioTools()], 
         instructions=persona + f"\n\nCurrent Context:\n{history_str}\nTime: {datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%H:%M:%S')}",
-        markdown=True,
+        markdown=True
         # REMOVED: show_tool_calls=False (Caused Crash)
         # REMOVED: add_datetime_to_instructions=True (Caused Crash)
-        prevent_hallucinations=True
+        # REMOVED: prevent_hallucinations=True (Caused Crash)
     )
 
 async def handle_chat(message):
@@ -173,8 +174,7 @@ async def handle_chat(message):
             for model_id in models:
                 try:
                     current_model = model_id if model_id else "Default"
-                    # print(f"🔄 Trying {key_name} :: {current_model}")
-
+                    
                     agent = get_hero_agent(
                         str(message.author.id), 
                         key, 
