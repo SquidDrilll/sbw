@@ -85,4 +85,4 @@ async def handle_chat(message: discord.Message, bot: discord.Client, bio_tools):
                 )
 
     except Exception as e:
-        logger.exception("Critical fail in ChatHandler")
+        logger.exception(e)
