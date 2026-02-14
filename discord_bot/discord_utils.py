@@ -20,6 +20,7 @@ def restore_mentions(response):
     """
     Converts @Name(ID) back to <@ID> for Discord rendering.
     """
-    if not response: return ""
+    if not response: 
+        return ""
     pattern = r"@([^\(\)<>]+?)\s*\((\d+)\)"
     return re.sub(pattern, lambda m: f"<@{m.group(2)}>", response)
