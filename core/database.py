@@ -80,14 +80,13 @@ class Database:
             logger.error(f"Global Search Error: {e}")
             return []
 
-    # --- APPENDED METHODS FOR TARGETED SEARCH ---
-
+    # --- APPENDED SEARCH METHODS FOR LOGIC FIXES ---
+    
     async def search_messages_in_batches(self, query: str, channel_ids: List[int], limit: int = 50) -> List[Dict]:
         """Searches for a user name ONLY within specific channels (Current Server)."""
         if not self.pool or not channel_ids: return []
         try:
             async with self.pool.acquire() as conn:
-                # Search strictly within the provided channel IDs
                 rows = await conn.fetch("""
                     SELECT content, author_name, created_at 
                     FROM messages 
