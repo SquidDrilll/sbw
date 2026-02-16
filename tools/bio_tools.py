@@ -5,7 +5,7 @@ from core.execution_context import get_current_channel
 from core.database import db_manager
 import logging
 import discord
-from typing import Optional, Union
+from typing import Optional, Union, List
 
 logger = logging.getLogger(__name__)
 
@@ -16,23 +16,72 @@ class BioTools(Toolkit):
         self.register(self.get_user_details)
         self.register(self.get_user_avatar)
         self.register(self.recall_personality_profile)
+        self.register(self.search_chat_history) # NEW TOOL
+
+    async def _get_server_channels(self) -> List[int]:
+        """Helper to get all text channel IDs in the current server to fix scope."""
+        channel = get_current_channel()
+        channel_ids = []
+        
+        # If we are in a guild, get all channels to search the WHOLE server
+        if channel and hasattr(channel, 'guild') and channel.guild:
+            for ch in channel.guild.text_channels:
+                channel_ids.append(ch.id)
+        # If DM or error, just use current channel
+        if not channel_ids and hasattr(channel, 'id'):
+            channel_ids = [channel.id]
+            
+        return channel_ids
+
+    async def search_chat_history(self, query: str) -> str:
+        """
+        Searches chat logs for events, actions, or specific keywords within the current server.
+        USE THIS when asked: "What did he do?", "What happened?", "Did I mention X?".
+        
+        Args:
+            query (str): The keyword or phrase to search for (e.g. "played minecraft", "argued with admin").
+        """
+        try:
+            c_ids = await self._get_server_channels()
+            messages = await db_manager.search_content_by_keyword(query, c_ids, limit=50)
+            
+            if not messages:
+                return f"I searched the logs for '{query}' in this server but found nothing."
+            
+            log_text = [f"--- Search Results for '{query}' (Current Server Only) ---"]
+            for msg in reversed(messages):
+                timestamp = msg['created_at'].strftime('%Y-%m-%d %H:%M')
+                log_text.append(f"[{timestamp}] {msg['author_name']}: {msg['content']}")
+            
+            return "\n".join(log_text)
+        except Exception as e:
+            return f"Search Error: {e}"
 
     async def recall_personality_profile(self, name: str) -> str:
         """
-        Recalls everything I know about a person from my long-term global memory.
+        Recalls everything I know about a person from THIS SERVER'S memory.
         Use this when someone asks me to 'Judge', 'Roast', or 'Describe' a user.
-        This searches across all channels I have ever seen.
 
         Args:
             name (str): The name of the person to recall memories of.
         """
         try:
-            # Increased limit to 100 for a "real" deep dive
-            messages = await db_manager.search_global_messages_by_name(name, limit=100)
-            if not messages:
-                return f"I actually don't have any memories of someone named '{name}' yet."
+            # 1. Get Channels for THIS server only (Fixes cross-server confusion)
+            c_ids = await self._get_server_channels()
             
-            log_text = [f"--- Memories of {name} (Extracted from Global Index) ---"]
+            # 2. Search only those channels
+            messages = await db_manager.search_messages_in_batches(name, c_ids, limit=100)
+            
+            if not messages:
+                # Fallback to global only if server search fails completely
+                messages = await db_manager.search_global_messages_by_name(name, limit=20)
+                if not messages:
+                    return f"I don't have any memories of someone named '{name}' in this server."
+                else:
+                    # Explicitly state these are from outside context to avoid confusion
+                    return f"I found some global memories of '{name}', but nothing in this server specifically (These might be a different person):\n" + str(messages[:5])
+            
+            log_text = [f"--- Memories of {name} (This Server Only) ---"]
             for msg in reversed(messages): # chronological order is better for 'thinking'
                 timestamp = msg['created_at'].strftime('%Y-%m-%d %H:%M')
                 log_text.append(f"[{timestamp}] {msg['content']}")
