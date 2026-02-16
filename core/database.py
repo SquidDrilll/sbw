@@ -80,4 +80,43 @@ class Database:
             logger.error(f"Global Search Error: {e}")
             return []
 
+    # --- APPENDED METHODS FOR TARGETED SEARCH ---
+
+    async def search_messages_in_batches(self, query: str, channel_ids: List[int], limit: int = 50) -> List[Dict]:
+        """Searches for a user name ONLY within specific channels (Current Server)."""
+        if not self.pool or not channel_ids: return []
+        try:
+            async with self.pool.acquire() as conn:
+                # Search strictly within the provided channel IDs
+                rows = await conn.fetch("""
+                    SELECT content, author_name, created_at 
+                    FROM messages 
+                    WHERE author_name ILIKE $1 
+                    AND channel_id = ANY($2::bigint[])
+                    ORDER BY created_at DESC 
+                    LIMIT $3
+                """, f"%{query}%", channel_ids, limit)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"Batch Search Error: {e}")
+            return []
+
+    async def search_content_by_keyword(self, keyword: str, channel_ids: List[int], limit: int = 50) -> List[Dict]:
+        """Searches message CONTENT for keywords (events, actions) in specific channels."""
+        if not self.pool or not channel_ids: return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT content, author_name, created_at 
+                    FROM messages 
+                    WHERE content ILIKE $1 
+                    AND channel_id = ANY($2::bigint[])
+                    ORDER BY created_at DESC 
+                    LIMIT $3
+                """, f"%{keyword}%", channel_ids, limit)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"Content Search Error: {e}")
+            return []
+
 db_manager = Database()
