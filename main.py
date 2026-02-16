@@ -87,7 +87,7 @@ async def on_message(message):
         return
 
     # Respond to prefix or direct mentions
-    if message.content.startswith(PREFIX) or bot.user.mentioned_in(message):
+    if message.content.startswith(PREFIX):
         await handle_chat(message, bot, bio_tools_instance)
 
 if __name__ == "__main__":
